@@ -10,6 +10,7 @@ import { VectorStoreService, VectorMetadata } from './VectorStoreService.js';
 import { LLMProviderFactory, LLMRouter } from '../models/LLMProvider.js';
 import { config } from '../utils/config.js';
 import logger from '../utils/logger.js';
+import { ProgressManager } from '../utils/UploadProgress.js';
 
 /**
  * 检索结果
@@ -77,14 +78,25 @@ export class RAGService {
   /**
    * 添加文档到知识库
    */
-  async addDocument(filePath: string): Promise<IngestionResult> {
+  async addDocument(filePath: string, fileId?: string): Promise<IngestionResult> {
+    const progressManager = fileId ? ProgressManager.getInstance() : null;
+
     logger.info(`[Pipeline] Processing: ${filePath}`);
 
     // Step 1: 加载文档
+    if (progressManager) {
+      progressManager.updateStage(fileId, 'load', { status: 'processing', progress: 0 });
+    }
     const loaded = await DocumentLoader.load(filePath);
+    if (progressManager) {
+      progressManager.updateStage(fileId, 'load', { status: 'completed', progress: 100 });
+    }
     logger.info(`[Pipeline] Loaded ${loaded.documents.length} documents`);
 
     // Step 2: 数据清洗
+    if (progressManager) {
+      progressManager.updateStage(fileId, 'clean', { status: 'processing', progress: 0 });
+    }
     const fileType = loaded.metadata.fileType;
     const cleanedDocs = loaded.documents.map(doc => ({
       ...doc,
@@ -96,23 +108,42 @@ export class RAGService {
         ? DataCleaner.cleanMarkdown(doc.pageContent)
         : DataCleaner.clean(doc.pageContent),
     }));
+    if (progressManager) {
+      progressManager.updateStage(fileId, 'clean', { status: 'completed', progress: 100 });
+    }
     logger.info(`[Pipeline] Cleaned ${cleanedDocs.length} documents`);
 
     // Step 3: 文本分块
+    if (progressManager) {
+      progressManager.updateStage(fileId, 'split', { status: 'processing', progress: 0 });
+    }
     const splitterConfig = TextSplitterFactory.getConfigForFileType(fileType, loaded.documents[0]?.metadata);
     const chunks = await TextSplitterFactory.splitDocuments(cleanedDocs, splitterConfig);
+    if (progressManager) {
+      progressManager.updateStage(fileId, 'split', { status: 'completed', progress: 100 });
+    }
     logger.info(`[Pipeline] Split into ${chunks.length} chunks`);
 
     // 统计信息
     const stats = ChunkStatsCalculator.calculate(chunks);
     ChunkStatsCalculator.logStats(stats, filePath);
 
-    // Step 4: 向量化
+    // Step 4: 向量化（带进度）
+    if (progressManager) {
+      progressManager.updateStage(fileId, 'embed', { status: 'processing', progress: 0 });
+    }
     const texts = chunks.map(c => c.pageContent);
-    const vectors = await this.embeddingService.embedDocuments(texts);
+    const vectors = await this.embeddingService.embedDocuments(texts, (progress) => {
+      if (progressManager) {
+        progressManager.updateStage(fileId, 'embed', { progress, message: `向量化中：${progress}%` });
+      }
+    });
     logger.info(`[Pipeline] Embedded ${vectors.length} vectors`);
 
-    // Step 5: 存储 - merge metadata into documents
+    // Step 5: 存储向量
+    if (progressManager) {
+      progressManager.updateStage(fileId, 'store', { status: 'processing', progress: 0 });
+    }
     const chunksWithMetadata = chunks.map((chunk, idx) => {
       const meta: VectorMetadata = {
         source: filePath,
@@ -129,6 +160,9 @@ export class RAGService {
 
     const ids = chunksWithMetadata.map((_, idx) => `${VectorStoreService.sanitizeId(filePath)}_${idx}`);
     const vectorIds = await this.vectorStore.addDocuments(chunksWithMetadata, { ids });
+    if (progressManager) {
+      progressManager.updateStage(fileId, 'store', { status: 'completed', progress: 100 });
+    }
     logger.info(`[Pipeline] Stored ${vectorIds.length} vectors`);
 
     return {

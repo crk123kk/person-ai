@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>RAG Assistant - 个人知识库助手</title>
+  <!-- Markdown 渲染 -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
     * {
       margin: 0;
@@ -62,7 +64,8 @@
     .chat-section {
       display: flex;
       flex-direction: column;
-      height: 70vh;
+      height: 85vh;
+      max-height: 800px;
     }
 
     .chat-header, .knowledge-header {
@@ -106,6 +109,72 @@
       background: #f5f5f5;
       color: #333;
       border-bottom-left-radius: 4px;
+      max-height: none;
+      overflow-y: visible;
+    }
+
+    /* Markdown 内容样式 */
+    .message.assistant .markdown-content {
+      line-height: 1.7;
+    }
+    .message.assistant .markdown-content h1,
+    .message.assistant .markdown-content h2,
+    .message.assistant .markdown-content h3,
+    .message.assistant .markdown-content h4 {
+      margin-top: 1em;
+      margin-bottom: 0.5em;
+      font-weight: 600;
+    }
+    .message.assistant .markdown-content h1 { font-size: 1.5em; }
+    .message.assistant .markdown-content h2 { font-size: 1.3em; }
+    .message.assistant .markdown-content h3 { font-size: 1.1em; }
+    .message.assistant .markdown-content p {
+      margin-bottom: 0.8em;
+    }
+    .message.assistant .markdown-content ul,
+    .message.assistant .markdown-content ol {
+      margin-left: 1.5em;
+      margin-bottom: 0.8em;
+    }
+    .message.assistant .markdown-content code {
+      background: rgba(0,0,0,0.06);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 0.9em;
+    }
+    .message.assistant .markdown-content pre {
+      background: #2d2d2d;
+      color: #f8f8f2;
+      padding: 12px;
+      border-radius: 6px;
+      overflow-x: auto;
+      margin: 10px 0;
+    }
+    .message.assistant .markdown-content pre code {
+      background: transparent;
+      padding: 0;
+    }
+    .message.assistant .markdown-content blockquote {
+      border-left: 3px solid #667eea;
+      padding-left: 12px;
+      margin: 10px 0;
+      color: #666;
+    }
+    .message.assistant .markdown-content table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 10px 0;
+    }
+    .message.assistant .markdown-content th,
+    .message.assistant .markdown-content td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: left;
+    }
+    .message.assistant .markdown-content th {
+      background: #f0f0f0;
+      font-weight: 600;
     }
 
     .message.sources {
@@ -114,6 +183,16 @@
       margin-top: 8px;
       padding-top: 8px;
       border-top: 1px solid rgba(0,0,0,0.1);
+    }
+
+    /* 流式输出光标效果 */
+    .typing-cursor::after {
+      content: '|';
+      animation: blink 1s infinite;
+    }
+    @keyframes blink {
+      0%, 50% { opacity: 1; }
+      51%, 100% { opacity: 0; }
     }
 
     .chat-input {
@@ -273,6 +352,76 @@
       to { transform: rotate(360deg); }
     }
 
+    /* 进度条样式 */
+    .progress-container {
+      margin-top: 15px;
+      display: none;
+    }
+
+    .progress-container.active {
+      display: block;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 8px;
+      background: #f0f0f0;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 8px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      transition: width 0.3s ease;
+      border-radius: 4px;
+    }
+
+    .progress-status {
+      font-size: 0.85rem;
+      color: #666;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .progress-stage {
+      font-size: 0.8rem;
+      color: #999;
+    }
+
+    .progress-stage.completed {
+      color: #22c55e;
+    }
+
+    .progress-stage.processing {
+      color: #667eea;
+      font-weight: 500;
+    }
+
+    .stage-indicator {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      margin-right: 4px;
+    }
+
+    .stage-indicator.completed {
+      background: #22c55e;
+    }
+
+    .stage-indicator.processing {
+      background: #667eea;
+      animation: pulse 1s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
     .empty-state {
       text-align: center;
       padding: 40px 20px;
@@ -336,6 +485,17 @@
             <p>📁 点击上传</p>
             <p style="font-size: 0.85rem; color: #999;">支持拖拽上传</p>
             <p style="font-size: 0.8rem; color: #ccc;">PDF, Markdown, TXT, DOCX, 代码文件</p>
+
+            <!-- 进度条容器 -->
+            <div class="progress-container" id="progressContainer">
+              <div class="progress-bar">
+                <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+              </div>
+              <div class="progress-status">
+                <span id="progressPercent">0%</span>
+                <span id="progressStage" class="progress-stage">准备上传...</span>
+              </div>
+            </div>
           </div>
 
           <ul class="document-list" id="documentList">

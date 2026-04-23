@@ -7,6 +7,8 @@ import * as fs from 'fs';
 import { RAGService } from './rag/RAGService.js';
 import { config } from './utils/config.js';
 import logger from './utils/logger.js';
+import { ProgressManager } from './utils/UploadProgress.js';
+import { v4 as uuidv4 } from 'uuid';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -60,6 +62,35 @@ export async function startServer(port: number): Promise<void> {
 
   // API 路由
 
+  // SSE 进度订阅端点
+  app.get('/api/upload-progress/:fileId', (req, res) => {
+    const { fileId } = req.params;
+    const progressManager = ProgressManager.getInstance();
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+
+    const sendProgress = (progress: any) => {
+      res.write(`data: ${JSON.stringify(progress)}\n\n`);
+    };
+
+    // 立即发送当前进度
+    const currentProgress = progressManager.getProgress(fileId);
+    if (currentProgress) {
+      sendProgress(currentProgress);
+    }
+
+    // 订阅进度更新
+    const unsubscribe = progressManager.subscribe(fileId, sendProgress);
+
+    // 客户端断开连接时清理
+    req.on('close', () => {
+      unsubscribe();
+    });
+  });
+
   // 健康检查
   app.get('/api/health', async (_req, res) => {
     try {
@@ -87,11 +118,23 @@ export async function startServer(port: number): Promise<void> {
         return res.status(400).json({ error: '没有上传文件' });
       }
 
-      logger.info(`Uploading document: ${req.file.originalname}`);
-      const result = await rag.addDocument(req.file.path);
+      const fileId = uuidv4();
+      const progressManager = ProgressManager.getInstance();
+
+      // 创建进度跟踪
+      progressManager.createProgress(fileId, req.file.originalname);
+      progressManager.updateStage(fileId, 'upload', { progress: 100, status: 'completed' });
+
+      logger.info(`Uploading document: ${req.file.originalname} (fileId: ${fileId})`);
+
+      // 异步处理文档，立即返回 fileId
+      const result = await rag.addDocument(req.file.path, fileId);
+
+      progressManager.updateStatus(fileId, 'completed');
 
       res.json({
         success: true,
+        fileId,
         document: {
           id: result.documentId,
           chunks: result.totalChunks,
@@ -100,6 +143,8 @@ export async function startServer(port: number): Promise<void> {
       });
     } catch (error) {
       logger.error('Document upload failed:', error);
+      const fileId = req.file ? req.file.filename : 'unknown';
+      ProgressManager.getInstance().updateStatus(fileId, 'failed', error instanceof Error ? error.message : 'Unknown error');
       res.status(500).json({ error: '文档处理失败' });
     }
   });
@@ -122,6 +167,57 @@ export async function startServer(port: number): Promise<void> {
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: '删除失败' });
+    }
+  });
+
+  // 问答（流式输出）
+  app.post('/api/chat/stream', async (req, res) => {
+    try {
+      const { query, sessionId } = req.body;
+
+      if (!query) {
+        res.setHeader('Content-Type', 'application/json');
+        return res.status(400).json({ error: '缺少 query 参数' });
+      }
+
+      // 设置 SSE 响应头
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+
+      logger.info(`Stream chat request: ${query}`);
+      const response = await rag.chat(query, sessionId);
+      logger.info(`Stream chat response: ${response.answer?.length || 0} chars`);
+
+      // 流式发送回答（按字符发送）
+      const answer = response.answer || '抱歉，我没有找到相关内容。';
+
+      // 先发送 sources
+      res.write(`data: ${JSON.stringify({
+        type: 'content',
+        content: '',
+        sessionId: response.sessionId,
+        sources: response.sources
+      })}\n\n`);
+
+      for (let i = 0; i < answer.length; i++) {
+        res.write(`data: ${JSON.stringify({
+          type: 'content',
+          content: answer[i]
+        })}\n\n`);
+        await new Promise(resolve => setTimeout(resolve, 10)); // 控制流速
+      }
+
+      // 发送结束标记
+      res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+      res.end();
+
+    } catch (error) {
+      logger.error('Stream chat failed:', error);
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.write(`data: ${JSON.stringify({ type: 'error', error: error instanceof Error ? error.message : '问答失败' })}\n\n`);
+      res.end();
     }
   });
 

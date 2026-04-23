@@ -3,22 +3,59 @@ import path from 'path';
 import { Document } from '@langchain/core/documents';
 import logger from '../utils/logger.js';
 
-// 动态导入 PDF 和 DOCX loader
-let PDFLoader: any = null;
+// 动态导入 DOCX loader
 let DocxLoader: any = null;
-
-try {
-  const community = await import('@langchain/community/document_loaders/fs/pdf');
-  PDFLoader = community.PDFLoader;
-} catch (e) {
-  logger.warn('PDF loader not available, PDF files will not be supported');
-}
 
 try {
   const community = await import('@langchain/community/document_loaders/fs/docx');
   DocxLoader = community.DocxLoader;
 } catch (e) {
   logger.warn('DOCX loader not available, DOCX files will not be supported');
+}
+
+// PDF loader 使用 pdf-parse 包
+async function loadPDF(filePath: string): Promise<Document[]> {
+  try {
+    // 使用 require 方式导入，绕过 ESM 测试代码问题
+    const { createRequire } = await import('module');
+    const require = createRequire(import.meta.url);
+    const pdfParse = require('pdf-parse');
+
+    logger.info(`Parsing PDF file: ${filePath}`);
+    const dataBuffer = fs.readFileSync(filePath);
+    const data = await pdfParse(dataBuffer);
+
+    const pages = data.numpages;
+    const text = data.text;
+    const documents: Document[] = [];
+
+    // 简单按页数平均分割
+    const avgCharsPerPage = Math.floor(text.length / Math.max(pages, 1));
+
+    for (let i = 0; i < pages; i++) {
+      const startIdx = i * avgCharsPerPage;
+      const endIdx = i === pages - 1 ? text.length : (i + 1) * avgCharsPerPage;
+      const pageText = text.slice(startIdx, endIdx);
+
+      if (pageText.trim().length > 50) {
+        documents.push({
+          pageContent: pageText,
+          metadata: {
+            source: filePath,
+            type: 'pdf',
+            page: i + 1,
+            total_pages: pages,
+          },
+        });
+      }
+    }
+
+    logger.info(`PDF loaded: ${pages} pages, ${text.length} characters`);
+    return documents;
+  } catch (error) {
+    logger.error('Failed to load PDF:', error);
+    throw new Error(`PDF load failed: ${error.message}`);
+  }
 }
 
 export interface LoadedDocument {
@@ -46,10 +83,7 @@ export class DocumentLoader {
     try {
       switch (ext) {
         case '.pdf':
-          if (!PDFLoader) {
-            throw new Error('PDF support not available. Install pdf-parse package.');
-          }
-          documents = await new PDFLoader(filePath).load();
+          documents = await loadPDF(filePath);
           break;
 
         case '.docx':

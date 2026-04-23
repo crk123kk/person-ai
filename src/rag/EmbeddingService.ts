@@ -47,7 +47,7 @@ export class EmbeddingService {
   /**
    * 批量生成向量（带重试和进度）
    */
-  async embedDocuments(texts: string[]): Promise<number[][]> {
+  async embedDocuments(texts: string[], onProgress?: (progress: number) => void): Promise<number[][]> {
     const batchSize = config.embeddingBatchSize;
     const maxRetries = config.embeddingMaxRetries;
     const vectors: number[][] = [];
@@ -67,7 +67,13 @@ export class EmbeddingService {
 
           // 进度日志
           const progress = Math.min(i + batchSize, texts.length);
-          logger.info(`Embedding progress: ${progress}/${texts.length}`);
+          const percent = Math.round((progress / texts.length) * 100);
+          logger.info(`Embedding progress: ${progress}/${texts.length} (${percent}%)`);
+
+          // 回调进度
+          if (onProgress) {
+            onProgress(percent);
+          }
         } catch (error) {
           attempts++;
           logger.warn(`Embedding batch failed (attempt ${attempts}/${maxRetries}):`, error);
