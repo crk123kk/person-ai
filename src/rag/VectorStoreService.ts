@@ -8,6 +8,7 @@ import fs from 'fs';
 
 export interface VectorMetadata {
   source: string;
+  displayName?: string;
   chunkIndex: number;
   totalChunks: number;
   fileType: string;
@@ -123,7 +124,7 @@ export class VectorStoreService {
     logger.info(`Adding ${documents.length} documents to vector store`);
 
     try {
-      await store.addDocuments(documents, options.ids ? { ids: options.ids } : undefined);
+      await store.addDocuments(documents);
 
       // 更新缓存
       documents.forEach((doc, i) => {
@@ -264,6 +265,34 @@ export class VectorStoreService {
     ).size;
 
     return { totalChunks, totalFiles: uniqueFiles };
+  }
+
+  /**
+   * 关键词搜索（中文分词简化版：按 2-4 字的滑动窗口匹配）
+   */
+  keywordSearch(query: string, topK: number = 5): { doc: StoredDocument; score: number }[] {
+    const results: { doc: StoredDocument; score: number }[] = [];
+    // 从查询中提取 2-4 字的子串作为关键词
+    const keywords: string[] = [];
+    const cleanQuery = query.replace(/[\s，。？！、；：''（）\[\]{}]/g, '');
+    for (let len = Math.min(4, cleanQuery.length); len >= 2; len--) {
+      for (let i = 0; i <= cleanQuery.length - len; i++) {
+        const kw = cleanQuery.substring(i, i + len);
+        if (!keywords.includes(kw)) keywords.push(kw);
+      }
+    }
+
+    for (const doc of this.cachedDocs.values()) {
+      let matchCount = 0;
+      for (const kw of keywords) {
+        if (doc.pageContent.includes(kw)) matchCount++;
+      }
+      if (matchCount > 0) {
+        results.push({ doc, score: matchCount / keywords.length });
+      }
+    }
+
+    return results.sort((a, b) => b.score - a.score).slice(0, topK);
   }
 
   /**

@@ -40,6 +40,10 @@ export async function startServer(port: number): Promise<void> {
   });
 
   const fileFilter = (_req: any, file: any, cb: any) => {
+    // Fix Chinese filename encoding: Multer interprets originalname as Latin-1,
+    // but browsers send UTF-8. Re-encode to preserve Chinese characters.
+    file.originalname = Buffer.from(file.originalname, 'latin1').toString('utf8');
+
     const allowedExtensions = [
       '.pdf', '.md', '.markdown', '.txt', '.text',
       '.docx',
@@ -61,6 +65,27 @@ export async function startServer(port: number): Promise<void> {
   });
 
   // API 路由
+
+  // 检查模型状态
+  app.get('/api/model/status', async (_req, res) => {
+    try {
+      const status = await rag.getModelStatus();
+      res.json(status);
+    } catch (error) {
+      res.status(500).json({ error: '获取模型状态失败' });
+    }
+  });
+
+  // 加载/预热模型
+  app.post('/api/model/warmup', async (_req, res) => {
+    try {
+      await rag.warmUp();
+      const status = await rag.getModelStatus();
+      res.json({ success: true, ...status });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : '模型加载失败' });
+    }
+  });
 
   // SSE 进度订阅端点
   app.get('/api/upload-progress/:fileId', (req, res) => {
@@ -128,7 +153,7 @@ export async function startServer(port: number): Promise<void> {
       logger.info(`Uploading document: ${req.file.originalname} (fileId: ${fileId})`);
 
       // 异步处理文档，立即返回 fileId
-      const result = await rag.addDocument(req.file.path, fileId);
+      const result = await rag.addDocument(req.file.path, fileId, req.file.originalname);
 
       progressManager.updateStatus(fileId, 'completed');
 
@@ -170,7 +195,7 @@ export async function startServer(port: number): Promise<void> {
     }
   });
 
-  // 问答（流式输出）
+  // 问答（流式输出 — 真正的 LLM 流式）
   app.post('/api/chat/stream', async (req, res) => {
     try {
       const { query, sessionId } = req.body;
@@ -187,30 +212,42 @@ export async function startServer(port: number): Promise<void> {
       res.setHeader('X-Accel-Buffering', 'no');
 
       logger.info(`Stream chat request: ${query}`);
-      const response = await rag.chat(query, sessionId);
-      logger.info(`Stream chat response: ${response.answer?.length || 0} chars`);
 
-      // 流式发送回答（按字符发送）
-      const answer = response.answer || '抱歉，我没有找到相关内容。';
+      // 立即发送思考状态，避免前端长时间无反馈
+      res.write(`data: ${JSON.stringify({ type: 'thinking', message: '正在检索相关文档...' })}\n\n`);
 
-      // 先发送 sources
-      res.write(`data: ${JSON.stringify({
-        type: 'content',
-        content: '',
-        sessionId: response.sessionId,
-        sources: response.sources
-      })}\n\n`);
+      // 心跳保活：每 10 秒发送一次，防止代理/浏览器超时断开
+      const heartbeat = setInterval(() => {
+        res.write(`data: ${JSON.stringify({ type: 'heartbeat' })}\n\n`);
+      }, 10000);
 
-      for (let i = 0; i < answer.length; i++) {
-        res.write(`data: ${JSON.stringify({
-          type: 'content',
-          content: answer[i]
-        })}\n\n`);
-        await new Promise(resolve => setTimeout(resolve, 10)); // 控制流速
+      try {
+        // 使用真正的流式生成
+        const stream = rag.chatStream(query, sessionId);
+
+        for await (const event of stream) {
+          if (event.type === 'sources') {
+            res.write(`data: ${JSON.stringify({
+              type: 'content',
+              content: '',
+              sessionId: event.sessionId,
+              sources: event.sources
+            })}\n\n`);
+          } else if (event.type === 'thinking') {
+            res.write(`data: ${JSON.stringify({ type: 'thinking', message: event.message })}\n\n`);
+          } else if (event.type === 'token') {
+            res.write(`data: ${JSON.stringify({
+              type: 'content',
+              content: event.token
+            })}\n\n`);
+          } else if (event.type === 'done') {
+            res.write(`data: ${JSON.stringify({ type: 'done', sessionId: event.sessionId })}\n\n`);
+          }
+        }
+      } finally {
+        clearInterval(heartbeat);
       }
 
-      // 发送结束标记
-      res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
       res.end();
 
     } catch (error) {
@@ -321,6 +358,13 @@ export async function startServer(port: number): Promise<void> {
 
   return new Promise((resolve, reject) => {
     const server = app.listen(port, () => {
+      // 预热 LLM 模型（尤其是 Ollama 本地模型，冷加载需要 1-2 分钟）
+      rag.warmUp().then(() => {
+        logger.info('LLM model warmed up');
+      }).catch((err: Error) => {
+        logger.warn('LLM warm-up failed (will retry on first request):', err.message);
+      });
+
       resolve();
     });
 

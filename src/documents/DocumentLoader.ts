@@ -13,48 +13,97 @@ try {
   logger.warn('DOCX loader not available, DOCX files will not be supported');
 }
 
-// PDF loader 使用 pdf-parse 包
+// PDF loader 使用 pdf-parse 包，逐页提取文本
 async function loadPDF(filePath: string): Promise<Document[]> {
   try {
-    // 使用 require 方式导入，绕过 ESM 测试代码问题
     const { createRequire } = await import('module');
     const require = createRequire(import.meta.url);
     const pdfParse = require('pdf-parse');
 
     logger.info(`Parsing PDF file: ${filePath}`);
     const dataBuffer = fs.readFileSync(filePath);
-    const data = await pdfParse(dataBuffer);
 
-    const pages = data.numpages;
-    const text = data.text;
+    // 逐页提取文本，通过 pagerender 回调获取每页的真实内容
+    const pageTexts: string[] = [];
+    const renderPage = (pageData: any) => {
+      const renderOptions = {
+        normalizeWhitespace: false,
+        disableCombineTextItems: false,
+      };
+      return pageData.getTextContent(renderOptions).then((textContent: any) => {
+        const items = textContent.items;
+        if (!items || items.length === 0) {
+          pageTexts.push('');
+          return '';
+        }
+
+        // 根据文本项的位置信息智能合并，避免多余空格
+        const LINE_HEIGHT_THRESHOLD = 2;
+        let pageText = '';
+        let lastY: number | null = null;
+        let lastX: number | null = null;
+        let lastWidth: number | null = null;
+
+        for (const item of items) {
+          if (!item.str || item.str.trim().length === 0) continue;
+
+          const x = item.transform[4];
+          const y = item.transform[5];
+          const width = item.width || 0;
+
+          if (lastY === null) {
+            // 第一个文本项
+            pageText += item.str;
+          } else if (Math.abs(y - lastY) > LINE_HEIGHT_THRESHOLD) {
+            // 换行
+            pageText += '\n' + item.str;
+          } else {
+            // 同一行：根据 x 坐标间距判断是否需要加空格
+            const gap = x - (lastX! + lastWidth!);
+            // 字符宽度的中位数估算（中文约 12-16px，英文约 5-8px）
+            const charWidth = Math.max(item.width / Math.max(item.str.length, 1), 1);
+            if (gap > charWidth * 0.3) {
+              // 间距超过 0.3 个字符宽度，加空格
+              pageText += ' ' + item.str;
+            } else {
+              // 间距很小，直接拼接（PDF 提取伪影导致的假空格）
+              pageText += item.str;
+            }
+          }
+
+          lastY = y;
+          lastX = x;
+          lastWidth = width;
+        }
+
+        pageTexts.push(pageText);
+        return '';
+      });
+    };
+
+    await pdfParse(dataBuffer, { pagerender: renderPage });
+
     const documents: Document[] = [];
-
-    // 简单按页数平均分割
-    const avgCharsPerPage = Math.floor(text.length / Math.max(pages, 1));
-
-    for (let i = 0; i < pages; i++) {
-      const startIdx = i * avgCharsPerPage;
-      const endIdx = i === pages - 1 ? text.length : (i + 1) * avgCharsPerPage;
-      const pageText = text.slice(startIdx, endIdx);
-
-      if (pageText.trim().length > 50) {
+    for (let i = 0; i < pageTexts.length; i++) {
+      const pageText = pageTexts[i];
+      if (pageText.trim().length > 20) {
         documents.push({
           pageContent: pageText,
           metadata: {
             source: filePath,
             type: 'pdf',
             page: i + 1,
-            total_pages: pages,
+            total_pages: pageTexts.length,
           },
         });
       }
     }
 
-    logger.info(`PDF loaded: ${pages} pages, ${text.length} characters`);
+    logger.info(`PDF loaded: ${pageTexts.length} pages, ${documents.length} non-empty`);
     return documents;
   } catch (error) {
     logger.error('Failed to load PDF:', error);
-    throw new Error(`PDF load failed: ${error.message}`);
+    throw new Error(`PDF load failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 

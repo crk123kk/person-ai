@@ -74,6 +74,23 @@ export class DataCleaner {
 
     logger.debug('Cleaning PDF artifacts');
 
+    // 0. 修复 PDF 逐字提取导致的字符间多余空格
+    // PDF pagerender 按文本项提取，每个 item 之间会被加空格
+    // 中文之间的空格一定是伪影，中英文之间的空格也多为伪影
+    // 策略：先合并所有中文间空格，再合并中英文边界空格
+    cleaned = cleaned.replace(/([一-鿿㐀-䶿])\s+([一-鿿㐀-䶿])/g, '$1$2');
+    cleaned = cleaned.replace(/([一-鿿㐀-䶿])\s+([a-zA-Z0-9])/g, '$1$2');
+    cleaned = cleaned.replace(/([a-zA-Z0-9])\s+([一-鿿㐀-䶿])/g, '$1$2');
+    // 合并中文标点间的空格
+    cleaned = cleaned.replace(/([，。？！、；：""''（）【】])\s+/g, '$1');
+    cleaned = cleaned.replace(/\s+([，。？！、；：""''（）【】])/g, '$1');
+    // 修复英文缩写/专有名词内部多余空格（如 "C l a u d e" -> "Claude"）
+    // 只处理短字母序列（2-8个单字母被空格分隔的情况）
+    cleaned = cleaned.replace(/\b([A-Z])\s([A-Z])\s([A-Z])\s([A-Z])\s([A-Z])\b/g, '$1$2$3$4$5');
+    cleaned = cleaned.replace(/\b([A-Z])\s([A-Z])\s([A-Z])\s([A-Z])\b/g, '$1$2$3$4');
+    cleaned = cleaned.replace(/\b([A-Z])\s([A-Z])\s([A-Z])\b/g, '$1$2$3');
+    cleaned = cleaned.replace(/\b([A-Za-z])\s([A-Za-z])\s([A-Za-z])\s([A-Za-z])\s([A-Za-z])\s([A-Za-z])\s([A-Za-z])\s([A-Za-z])\b/g, '$1$2$3$4$5$6$7$8');
+
     // 1. 修复断字（行末的连字符 + 换行）
     // 例如："trans-\nformer" -> "transformer"
     cleaned = cleaned.replace(/[-‐]\n/g, '');

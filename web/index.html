@@ -431,6 +431,84 @@
     .empty-state p {
       margin-top: 10px;
     }
+
+    /* 思考动画 */
+    .thinking-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 0;
+      color: #667eea;
+      font-size: 0.95rem;
+    }
+
+    .thinking-indicator .thinking-text {
+      margin-right: 2px;
+    }
+
+    .thinking-indicator .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #667eea;
+      animation: thinking-bounce 1.4s infinite ease-in-out both;
+    }
+
+    .thinking-indicator .dot:nth-child(2) {
+      animation-delay: -0.32s;
+    }
+
+    .thinking-indicator .dot:nth-child(3) {
+      animation-delay: -0.16s;
+    }
+
+    @keyframes thinking-bounce {
+      0%, 80%, 100% { transform: scale(0); }
+      40% { transform: scale(1); }
+    }
+
+    /* 模型状态 */
+    .model-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: #f8f9fa;
+      margin-bottom: 16px;
+      font-size: 0.85rem;
+    }
+
+    .model-status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ccc;
+      flex-shrink: 0;
+    }
+
+    .model-status.loaded .model-status-dot { background: #22c55e; }
+    .model-status.unloaded .model-status-dot { background: #f59e0b; }
+    .model-status.loading .model-status-dot { background: #667eea; animation: pulse 1s infinite; }
+    .model-status.error .model-status-dot { background: #ff4757; }
+
+    .model-status-text { flex: 1; color: #555; }
+
+    .warmup-btn {
+      padding: 5px 14px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      white-space: nowrap;
+    }
+
+    .warmup-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
   </style>
 </head>
 <body>
@@ -480,6 +558,13 @@
         </div>
 
         <div class="knowledge-content">
+          <!-- 模型状态 -->
+          <div id="modelStatus" class="model-status">
+            <span class="model-status-dot"></span>
+            <span class="model-status-text">检测模型中...</span>
+            <button id="warmupBtn" class="warmup-btn" onclick="warmupModel()" style="display:none;">启动模型</button>
+          </div>
+
           <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
             <input type="file" id="fileInput" accept=".pdf,.md,.markdown,.txt,.text,.docx,.py,.js,.ts,.java,.go,.rs" onchange="handleFileSelect(event)">
             <p>📁 点击上传</p>

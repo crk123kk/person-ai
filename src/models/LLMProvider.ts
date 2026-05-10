@@ -5,6 +5,11 @@ import { ChatOpenAI } from '@langchain/openai';
 import { config } from '../utils/config.js';
 import logger from '../utils/logger.js';
 
+export type StreamChunk = {
+  content: string;
+  done: boolean;
+};
+
 /**
  * LLM 提供商类型
  */
@@ -21,6 +26,93 @@ export interface LLMConfig {
   modelName?: string;
   baseUrl?: string;
   apiKey?: string;
+}
+
+/**
+ * 直接调用 Ollama HTTP API（绕过 LangChain，支持关闭 thinking 模式）
+ */
+async function* ollamaStream(prompt: string): AsyncGenerator<StreamChunk, void, undefined> {
+  const baseUrl = config.ollamaBaseUrl || 'http://localhost:11434';
+  const model = config.ollamaModel || 'llama3';
+
+  const response = await fetch(`${baseUrl}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      stream: true,
+      think: false,
+      options: {
+        temperature: config.llmTemperature,
+        num_predict: config.llmMaxTokens,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
+  }
+
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const data = JSON.parse(line);
+        if (data.done) continue;
+        // 只取 content，忽略 thinking 字段
+        const content = data.message?.content || '';
+        if (content) {
+          yield { content, done: false };
+        }
+      } catch {
+        // 忽略解析错误
+      }
+    }
+  }
+
+  yield { content: '', done: true };
+}
+
+/**
+ * Ollama 非流式调用
+ */
+async function ollamaInvoke(prompt: string): Promise<string> {
+  const baseUrl = config.ollamaBaseUrl || 'http://localhost:11434';
+  const model = config.ollamaModel || 'llama3';
+
+  const response = await fetch(`${baseUrl}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      stream: false,
+      think: false,
+      options: {
+        temperature: config.llmTemperature,
+        num_predict: config.llmMaxTokens,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json() as { message: { content: string } };
+  return data.message?.content || '';
 }
 
 /**
@@ -95,10 +187,12 @@ export class LLMProviderFactory {
    */
   static async healthCheck(provider?: LLMProviderType): Promise<boolean> {
     try {
-      const llm = this.create(provider ? { provider } : undefined);
-
-      // 简单测试，不消耗太多 token
-      await llm.invoke('Hi');
+      if (provider === 'ollama' || (!provider && config.llmProvider === 'ollama')) {
+        await ollamaInvoke('Hi');
+      } else {
+        const llm = this.create(provider ? { provider } : undefined);
+        await llm.invoke('Hi');
+      }
       return true;
     } catch (error) {
       logger.error('LLM health check failed:', error);
@@ -109,7 +203,6 @@ export class LLMProviderFactory {
 
 /**
  * 带降级策略的 LLM 路由
- * 当主 LLM 不可用时，自动切换到备用 LLM
  */
 export class LLMRouter {
   private primaryProvider: LLMProviderType;
@@ -147,10 +240,17 @@ export class LLMRouter {
 
     for (const provider of providersToTry) {
       try {
-        logger.debug(`Trying LLM provider: ${provider}`);
+        logger.info(`Invoking LLM provider: ${provider}`);
+
+        if (provider === 'ollama') {
+          const result = await ollamaInvoke(prompt);
+          this.currentProvider = provider;
+          return result;
+        }
+
         const llm = LLMProviderFactory.create({ provider });
         const response = await llm.invoke(prompt);
-        this.currentProvider = provider; // 更新当前成功 provider
+        this.currentProvider = provider;
         return response.content as string;
       } catch (error) {
         logger.warn(`LLM provider ${provider} failed:`, error);
@@ -159,6 +259,53 @@ export class LLMRouter {
     }
 
     throw new Error('All LLM providers failed');
+  }
+
+  /**
+   * 流式调用 LLM，逐 token 返回
+   */
+  async *stream(prompt: string): AsyncGenerator<StreamChunk, void, undefined> {
+    const providersToTry = [this.currentProvider, ...this.fallbackProviders];
+
+    for (const provider of providersToTry) {
+      try {
+        logger.info(`Streaming with LLM provider: ${provider}`);
+
+        if (provider === 'ollama') {
+          // 直接用 Ollama HTTP API，绕过 LangChain（解决 qwen thinking 模式问题）
+          for await (const chunk of ollamaStream(prompt)) {
+            yield chunk;
+          }
+          this.currentProvider = provider;
+          return;
+        }
+
+        // Anthropic / OpenAI 走 LangChain
+        const llm = LLMProviderFactory.create({ provider });
+
+        const streamInitPromise = llm.stream(prompt);
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Stream init timeout for ${provider} (${config.llmTimeout}ms)`)), config.llmTimeout)
+        );
+        const stream = await Promise.race([streamInitPromise, timeoutPromise]);
+
+        for await (const chunk of stream) {
+          const content = typeof chunk.content === 'string' ? chunk.content : '';
+          if (content) {
+            yield { content, done: false };
+          }
+        }
+
+        this.currentProvider = provider;
+        yield { content: '', done: true };
+        return;
+      } catch (error) {
+        logger.warn(`LLM stream provider ${provider} failed:`, error);
+        continue;
+      }
+    }
+
+    throw new Error('All LLM providers failed for streaming');
   }
 
   /**
