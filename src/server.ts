@@ -61,7 +61,7 @@ export async function startServer(port: number): Promise<void> {
   const upload = multer({
     storage,
     fileFilter,
-    limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+    limits: { fileSize: 200 * 1024 * 1024 }, // 200MB
   });
 
   // API 路由
@@ -137,7 +137,18 @@ export async function startServer(port: number): Promise<void> {
   });
 
   // 上传文档
-  app.post('/api/documents', upload.single('file'), async (req, res) => {
+  app.post('/api/documents', (req, res, next) => {
+    upload.single('file')(req, res, (err) => {
+      if (err) {
+        const msg = err.message || '上传失败';
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(413).json({ error: '文件太大，最大支持 200MB' });
+        }
+        return res.status(400).json({ error: msg });
+      }
+      next();
+    });
+  }, async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ error: '没有上传文件' });
