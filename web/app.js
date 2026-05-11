@@ -1,49 +1,284 @@
 /**
- * RAG Assistant 前端应用
+ * RAG Assistant - ChatGPT-style frontend
  */
 
 let currentSessionId = '';
 let isLoading = false;
 let modelLoaded = false;
+let sessionsData = [];
 
-// 初始化
+// Init
 document.addEventListener('DOMContentLoaded', () => {
-  initDragAndDrop();
-  loadDocuments();
+  initTheme();
   loadSessions();
-  updateStats();
   checkModelStatus();
 });
 
-/**
- * 初始化拖拽上传
- */
-function initDragAndDrop() {
-  const uploadArea = document.getElementById('uploadArea');
+/* ===== Theme ===== */
 
-  uploadArea.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    uploadArea.classList.add('dragover');
-  });
-
-  uploadArea.addEventListener('dragleave', () => {
-    uploadArea.classList.remove('dragover');
-  });
-
-  uploadArea.addEventListener('drop', (e) => {
-    e.preventDefault();
-    uploadArea.classList.remove('dragover');
-
-    const files = e.dataTransfer.files;
-    if (files.length > 0) {
-      uploadFile(files[0]);
-    }
-  });
+function initTheme() {
+  const saved = localStorage.getItem('theme');
+  if (saved === 'dark') {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    updateThemeUI(true);
+  }
 }
 
-/**
- * 处理文件选择
- */
+function toggleTheme() {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  if (isDark) {
+    document.documentElement.removeAttribute('data-theme');
+    localStorage.setItem('theme', 'light');
+  } else {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    localStorage.setItem('theme', 'dark');
+  }
+  updateThemeUI(!isDark);
+}
+
+function updateThemeUI(isDark) {
+  const lightIcon = document.getElementById('themeIconLight');
+  const darkIcon = document.getElementById('themeIconDark');
+  const label = document.getElementById('themeLabel');
+  if (isDark) {
+    lightIcon.style.display = 'none';
+    darkIcon.style.display = 'block';
+    label.textContent = '白天模式';
+  } else {
+    lightIcon.style.display = 'block';
+    darkIcon.style.display = 'none';
+    label.textContent = '暗夜模式';
+  }
+}
+
+/* ===== Sidebar ===== */
+
+function toggleSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  sidebar.classList.toggle('collapsed');
+}
+
+async function loadSessions() {
+  try {
+    const response = await fetch('/api/sessions');
+    const data = await response.json();
+    sessionsData = data.sessions || [];
+
+    const titles = await Promise.all(
+      sessionsData.map(async (session) => {
+        try {
+          const res = await fetch(`/api/sessions/${session.id}`);
+          const detail = await res.json();
+          const firstUserMsg = (detail.messages || []).find(m => m.role === 'user');
+          return firstUserMsg ? firstUserMsg.content.slice(0, 50) : null;
+        } catch {
+          return null;
+        }
+      })
+    );
+
+    sessionsData.forEach((session, i) => {
+      session.firstMessage = titles[i];
+    });
+
+    renderConversationList();
+  } catch (error) {
+    console.error('Failed to load sessions:', error);
+  }
+}
+
+function renderConversationList() {
+  const list = document.getElementById('conversationList');
+  const groups = groupSessionsByTime(sessionsData);
+
+  let html = '';
+  for (const [label, sessions] of Object.entries(groups)) {
+    if (sessions.length === 0) continue;
+    html += `<div class="conversation-group-label">${label}</div>`;
+    for (const session of sessions) {
+      const isActive = session.id === currentSessionId;
+      const title = escapeHtml(session.firstMessage || formatSessionTitle(session));
+      html += `
+        <div class="conversation-item ${isActive ? 'active' : ''}" onclick="switchSession('${session.id}')">
+          <span class="conv-title">${title}</span>
+          <button class="delete-btn" onclick="event.stopPropagation(); deleteSession('${session.id}')" title="删除">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path>
+            </svg>
+          </button>
+        </div>
+      `;
+    }
+  }
+
+  if (!html) {
+    html = '<div style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 0.85rem;">暂无对话</div>';
+  }
+
+  list.innerHTML = html;
+}
+
+function groupSessionsByTime(sessions) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today.getTime() - 86400000);
+  const weekAgo = new Date(today.getTime() - 7 * 86400000);
+
+  const groups = {
+    '今天': [],
+    '昨天': [],
+    '最近 7 天': [],
+    '更早': [],
+  };
+
+  for (const session of sessions) {
+    const date = new Date(session.updatedAt);
+    if (date >= today) {
+      groups['今天'].push(session);
+    } else if (date >= yesterday) {
+      groups['昨天'].push(session);
+    } else if (date >= weekAgo) {
+      groups['最近 7 天'].push(session);
+    } else {
+      groups['更早'].push(session);
+    }
+  }
+
+  return groups;
+}
+
+function startNewChat() {
+  currentSessionId = '';
+  showWelcomeScreen();
+  renderConversationList();
+  document.getElementById('messageInput').focus();
+}
+
+async function switchSession(sessionId) {
+  currentSessionId = sessionId;
+  renderConversationList();
+
+  try {
+    const response = await fetch(`/api/sessions/${sessionId}`);
+    const session = await response.json();
+
+    if (session.messages && session.messages.length > 0) {
+      showChatMessages(session.messages);
+    } else {
+      showWelcomeScreen();
+    }
+  } catch (error) {
+    console.error('Failed to load session:', error);
+    showWelcomeScreen();
+  }
+}
+
+async function deleteSession(sessionId) {
+  try {
+    const response = await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+    const result = await response.json();
+
+    if (result.success) {
+      if (currentSessionId === sessionId) {
+        startNewChat();
+      }
+      loadSessions();
+    }
+  } catch (error) {
+    console.error('Failed to delete session:', error);
+  }
+}
+
+/* ===== Chat Display ===== */
+
+function showWelcomeScreen() {
+  const chatArea = document.getElementById('chatArea');
+  chatArea.innerHTML = `
+    <div class="welcome" id="welcomeScreen">
+      <h1 class="welcome-title">有什么可以帮你的？</h1>
+    </div>
+  `;
+}
+
+function showChatMessages(messages) {
+  const chatArea = document.getElementById('chatArea');
+  chatArea.innerHTML = '<div class="messages-container" id="messagesContainer"></div>';
+
+  const container = document.getElementById('messagesContainer');
+  for (const msg of messages) {
+    appendMessage(msg.content, msg.role);
+  }
+}
+
+function appendMessage(text, role) {
+  let container = document.getElementById('messagesContainer');
+  if (!container) {
+    const chatArea = document.getElementById('chatArea');
+    chatArea.innerHTML = '<div class="messages-container" id="messagesContainer"></div>';
+    container = document.getElementById('messagesContainer');
+  }
+
+  const row = document.createElement('div');
+  row.className = `message-row ${role}`;
+
+  if (role === 'assistant') {
+    row.innerHTML = `
+      <div class="message-avatar assistant-avatar">AI</div>
+      <div class="message-content">
+        <div class="markdown-content">${marked.parse(text)}</div>
+      </div>
+    `;
+  } else {
+    row.innerHTML = `
+      <div class="message-content">${escapeHtml(text)}</div>
+      <div class="message-avatar user-avatar">You</div>
+    `;
+  }
+
+  container.appendChild(row);
+  scrollToBottom();
+}
+
+function createAssistantMessage() {
+  let container = document.getElementById('messagesContainer');
+  if (!container) {
+    const chatArea = document.getElementById('chatArea');
+    chatArea.innerHTML = '<div class="messages-container" id="messagesContainer"></div>';
+    container = document.getElementById('messagesContainer');
+  }
+
+  const row = document.createElement('div');
+  row.className = 'message-row assistant';
+
+  row.innerHTML = `
+    <div class="message-avatar assistant-avatar">AI</div>
+    <div class="message-content">
+      <div class="markdown-content">
+        <div class="thinking-indicator">
+          <span class="thinking-text">正在思考</span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+        </div>
+      </div>
+      <div class="sources" style="display:none;"></div>
+    </div>
+  `;
+
+  container.appendChild(row);
+  scrollToBottom();
+
+  return row;
+}
+
+function scrollToBottom() {
+  const chatArea = document.getElementById('chatArea');
+  chatArea.scrollTop = chatArea.scrollHeight;
+}
+
+/* ===== File Upload ===== */
+
 function handleFileSelect(event) {
   const files = event.target.files;
   if (files.length > 0) {
@@ -51,9 +286,6 @@ function handleFileSelect(event) {
   }
 }
 
-/**
- * 上传文件
- */
 async function uploadFile(file) {
   if (!modelLoaded) {
     showNotification('请先启动模型再上传文件', 'error');
@@ -63,29 +295,19 @@ async function uploadFile(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  const btn = document.getElementById('sendBtn');
-  const uploadArea = document.getElementById('uploadArea');
-  const progressContainer = document.getElementById('progressContainer');
-  const progressFill = document.getElementById('progressFill');
-  const progressPercent = document.getElementById('progressPercent');
-  const progressStage = document.getElementById('progressStage');
+  const progressContainer = document.getElementById('uploadProgress');
+  const progressFill = document.getElementById('uploadProgressFill');
+  const progressPercent = document.getElementById('uploadProgressPercent');
+  const progressStage = document.getElementById('uploadProgressStage');
 
-  // 显示进度条
   progressContainer.classList.add('active');
   progressFill.style.width = '0%';
   progressPercent.textContent = '0%';
   progressStage.textContent = '上传文件中...';
-  progressStage.className = 'progress-stage processing';
 
-  btn.disabled = true;
-  btn.textContent = '上传中...';
-  uploadArea.classList.add('uploading');
-
-  let currentFileId = null;
   let eventSource = null;
 
   try {
-    // 上传文件
     const uploadResponse = await fetch('/api/documents', {
       method: 'POST',
       body: formData,
@@ -97,59 +319,35 @@ async function uploadFile(file) {
       throw new Error(result.error || '上传失败');
     }
 
-    currentFileId = result.fileId;
+    const fileId = result.fileId;
 
-    // 订阅 SSE 进度更新
-    eventSource = subscribeToProgress(currentFileId, (progress) => {
+    eventSource = subscribeToProgress(fileId, (progress) => {
       progressFill.style.width = `${progress.overallProgress}%`;
       progressPercent.textContent = `${progress.overallProgress}%`;
 
-      // 更新当前阶段
       const currentStage = progress.stages.find(s => s.status === 'processing') ||
                           progress.stages.find(s => s.status === 'pending');
       if (currentStage) {
         progressStage.textContent = currentStage.message || currentStage.name;
       }
-
-      // 更新阶段状态显示
-      updateStageIndicators(progress.stages);
     });
 
-    // 等待处理完成（通过状态判断）
-    await waitForProcessingComplete(currentFileId, eventSource);
+    await waitForProcessingComplete(fileId, eventSource);
 
-    if (result.document) {
-      showNotification(`✅ 文件上传成功！\n分块数：${result.document.chunks}`, 'success');
-      loadDocuments();
-      updateStats();
-    }
-
+    showNotification(`文件上传成功！分块数：${result.document.chunks}`, 'success');
   } catch (error) {
-    showNotification(`❌ 上传失败：${error.message}`, 'error');
+    showNotification(`上传失败：${error.message}`, 'error');
   } finally {
-    // 关闭 SSE 连接
-    if (eventSource) {
-      eventSource.close();
-    }
-
-    btn.disabled = false;
-    btn.textContent = '发送';
+    if (eventSource) eventSource.close();
     document.getElementById('fileInput').value = '';
-    uploadArea.classList.remove('uploading');
-
-    // 3 秒后隐藏进度条
     setTimeout(() => {
       progressContainer.classList.remove('active');
     }, 3000);
   }
 }
 
-/**
- * 订阅进度更新（使用 EventSource）
- */
 function subscribeToProgress(fileId, callback) {
   const eventSource = new EventSource(`/api/upload-progress/${fileId}`);
-
   eventSource.onmessage = (event) => {
     try {
       const progress = JSON.parse(event.data);
@@ -158,26 +356,20 @@ function subscribeToProgress(fileId, callback) {
       console.error('Failed to parse progress:', e);
     }
   };
-
   eventSource.onerror = () => {
-    console.log('Progress SSE connection closed');
     eventSource.close();
   };
-
   return eventSource;
 }
 
-/**
- * 等待处理完成
- */
 function waitForProcessingComplete(fileId, eventSource) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       eventSource.close();
       reject(new Error('处理超时'));
-    }, 300000); // 5 分钟超时
+    }, 300000);
 
-    const messageHandler = (event) => {
+    eventSource.onmessage = (event) => {
       try {
         const progress = JSON.parse(event.data);
         if (progress.status === 'completed') {
@@ -193,242 +385,37 @@ function waitForProcessingComplete(fileId, eventSource) {
         console.error('Failed to parse progress:', e);
       }
     };
-
-    eventSource.onmessage = messageHandler;
   });
 }
 
-/**
- * 更新阶段指示器
- */
-function updateStageIndicators(stages) {
-  const stageNames = {
-    'upload': '上传',
-    'load': '加载',
-    'clean': '清洗',
-    'split': '分块',
-    'embed': '向量化',
-    'store': '存储',
-  };
+/* ===== Send Message ===== */
 
-  const stageElement = document.getElementById('progressStage');
-  if (!stageElement) return;
-
-  // 移除旧的指示器
-  const oldIndicators = stageElement.querySelectorAll('.stage-indicator');
-  oldIndicators.forEach(el => el.remove());
-
-  // 创建阶段指示器
-  let indicatorHtml = '';
-  stages.forEach(stage => {
-    const statusClass = stage.status === 'completed' ? 'completed' :
-                       stage.status === 'processing' ? 'processing' : '';
-    if (statusClass) {
-      indicatorHtml += `<span class="stage-indicator ${statusClass}" title="${stageNames[stage.name] || stage.name}"></span>`;
-    }
-  });
-
-  // 添加到进度阶段前面
-  const indicatorsSpan = document.createElement('span');
-  indicatorsSpan.innerHTML = indicatorHtml;
-  stageElement.insertBefore(indicatorsSpan, stageElement.firstChild);
-}
-
-/**
- * 显示通知
- */
-function showNotification(message, type = 'info') {
-  // 创建通知元素
-  const notification = document.createElement('div');
-  notification.className = `notification notification-${type}`;
-  notification.textContent = message;
-  notification.style.cssText = `
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    padding: 15px 25px;
-    border-radius: 8px;
-    background: ${type === 'success' ? '#22c55e' : type === 'error' ? '#ff4757' : '#667eea'};
-    color: white;
-    z-index: 10000;
-    animation: slideIn 0.3s ease;
-  `;
-
-  document.body.appendChild(notification);
-
-  // 3 秒后移除
-  setTimeout(() => {
-    notification.style.animation = 'slideOut 0.3s ease';
-    setTimeout(() => notification.remove(), 300);
-  }, 3000);
-}
-
-// 添加动画样式
-const style = document.createElement('style');
-style.textContent = `
-  @keyframes slideIn {
-    from { transform: translateX(100%); opacity: 0; }
-    to { transform: translateX(0); opacity: 1; }
-  }
-  @keyframes slideOut {
-    from { transform: translateX(0); opacity: 1; }
-    to { transform: translateX(100%); opacity: 0; }
-  }
-`;
-document.head.appendChild(style);
-
-/**
- * 加载文档列表
- */
-async function loadDocuments() {
-  try {
-    const response = await fetch('/api/documents');
-    const data = await response.json();
-
-    const list = document.getElementById('documentList');
-
-    if (data.documents.length === 0) {
-      list.innerHTML = '<li class="empty-state"><p>暂无文档</p></li>';
-    } else {
-      // 存储文档列表供删除时使用
-      window.currentDocuments = data.documents;
-
-      list.innerHTML = data.documents.map((doc, index) => {
-        // 提取文件名，处理路径
-        const fileName = doc.split(/[\\/]/).pop() || doc;
-        // 去掉 Multer 自动生成的唯一前缀 (timestamp-randomNumber-)
-        const displayName = fileName.replace(/^\d+-\d+-/, '');
-        // 使用 decodeURIComponent 尝试解码 URL 编码的字符
-        let decodedFileName = displayName;
-        try {
-          decodedFileName = decodeURIComponent(displayName);
-        } catch (e) {
-          // 如果解码失败，使用原文件名
-          decodedFileName = displayName;
-        }
-
-        return `
-        <li class="document-item">
-          <span title="${escapeHtml(decodedFileName)}">${escapeHtml(decodedFileName)}</span>
-          <button onclick="deleteDocument(${index})">删除</button>
-        </li>
-        `;
-      }).join('');
-    }
-  } catch (error) {
-    console.error('Failed to load documents:', error);
-  }
-}
-
-/**
- * 删除文档
- */
-async function deleteDocument(index) {
-  const documents = window.currentDocuments || [];
-  const source = documents[index];
-
-  if (!source) {
-    alert('文档列表为空，请刷新页面');
-    return;
-  }
-
-  if (!confirm(`确定要删除这个文档吗？\n${source.split(/[\\/]/).pop()}`)) {
-    return;
-  }
-
-  try {
-    const response = await fetch(`/api/documents/${encodeURIComponent(source)}`, {
-      method: 'DELETE',
-    });
-
-    const result = await response.json();
-
-    if (result.success) {
-      showNotification('删除成功', 'success');
-      loadDocuments();
-      updateStats();
-    } else {
-      alert(`删除失败：${result.error}`);
-    }
-  } catch (error) {
-    console.error('Delete failed:', error);
-    alert(`删除失败：${error.message}`);
-  }
-}
-
-/**
- * 加载会话列表
- */
-async function loadSessions() {
-  try {
-    const response = await fetch('/api/sessions');
-    const data = await response.json();
-
-    const select = document.getElementById('sessionSelect');
-    const options = ['<option value="">开始新对话</option>'];
-
-    data.sessions.forEach(session => {
-      const date = new Date(session.updatedAt).toLocaleString('zh-CN');
-      options.push(`<option value="${session.id}">${date} (${session.messageCount} 条消息)</option>`);
-    });
-
-    select.innerHTML = options.join('');
-  } catch (error) {
-    console.error('Failed to load sessions:', error);
-  }
-}
-
-/**
- * 切换会话
- */
-function switchSession() {
-  const select = document.getElementById('sessionSelect');
-  currentSessionId = select.value;
-
-  const sessionIdSpan = document.getElementById('sessionId');
-  sessionIdSpan.textContent = currentSessionId ? `会话：${currentSessionId.slice(0, 8)}...` : '';
-
-  // 清空聊天区域
-  const messages = document.getElementById('chatMessages');
-  messages.innerHTML = `
-    <div class="empty-state">
-      <p>💬 开始新的对话</p>
-    </div>
-  `;
-}
-
-/**
- * 发送消息（流式输出）
- */
 async function sendMessage() {
-  const input = document.getElementById('questionInput');
+  const input = document.getElementById('messageInput');
   const question = input.value.trim();
 
   if (!question || isLoading) return;
 
   if (!modelLoaded) {
-    showNotification('请先启动模型再提问', 'error');
+    showNotification('请先启动模型', 'error');
     return;
   }
 
-  // 添加到聊天
-  addMessage(question, 'user');
+  appendMessage(question, 'user');
   input.value = '';
+  autoResize(input);
 
   isLoading = true;
   updateSendButton();
 
-  // 创建助手消息容器（带思考动画）
-  const assistantMessageDiv = createAssistantMessage();
-  const contentDiv = assistantMessageDiv.querySelector('.markdown-content');
-  const sourcesDiv = assistantMessageDiv.querySelector('.sources');
+  const assistantRow = createAssistantMessage();
+  const contentDiv = assistantRow.querySelector('.markdown-content');
+  const sourcesDiv = assistantRow.querySelector('.sources');
 
   let fullAnswer = '';
   let sources = null;
-  let sessionId = null;
 
   try {
-    // 使用 fetch + ReadableStream 实现真正的流式读取
     const response = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -452,7 +439,6 @@ async function sendMessage() {
 
       sseBuffer += decoder.decode(value, { stream: true });
       const lines = sseBuffer.split('\n');
-      // 保留最后一个可能不完整的行
       sseBuffer = lines.pop() || '';
 
       for (const line of lines) {
@@ -461,37 +447,27 @@ async function sendMessage() {
             const data = JSON.parse(line.slice(6));
 
             if (data.type === 'thinking') {
-              // 更新思考状态文字（thinking 动画始终可见直到真正有内容）
               const thinkingText = contentDiv.querySelector('.thinking-text');
               if (thinkingText && data.message) {
                 thinkingText.textContent = data.message;
               }
             } else if (data.type === 'content') {
-              // 记录来源数据，但不立即显示（等回答完成后再显示）
               if (data.sources && !sources) {
                 sources = data.sources;
-                sessionId = data.sessionId;
               }
 
-              // 只在有实际文字内容时移除思考动画并渲染
               if (data.content && data.content.trim()) {
                 const thinkingIndicator = contentDiv.querySelector('.thinking-indicator');
-                if (thinkingIndicator) {
-                  thinkingIndicator.remove();
-                }
+                if (thinkingIndicator) thinkingIndicator.remove();
 
                 fullAnswer += data.content;
                 contentDiv.innerHTML = marked.parse(fullAnswer) + '<span class="typing-cursor"></span>';
-                // 自动滚动聊天区域
-                const chatMessages = document.getElementById('chatMessages');
-                chatMessages.scrollTop = chatMessages.scrollHeight;
+                scrollToBottom();
               }
             } else if (data.type === 'done') {
-              // 移除光标
               const cursor = contentDiv.querySelector('.typing-cursor');
               if (cursor) cursor.remove();
 
-              // 回答完成后显示参考来源
               if (sources && sources.length > 0) {
                 const MIN_SCORE = 0.55;
                 const MAX_SOURCES = 4;
@@ -502,7 +478,6 @@ async function sendMessage() {
                   return raw.replace(/^(\d+-\d+-)+/, '');
                 };
 
-                // 按文件名+页码去重，保留最高分
                 const grouped = new Map();
                 sources.forEach(s => {
                   const score = parseFloat(s.score) || 0;
@@ -530,7 +505,6 @@ async function sendMessage() {
 
               if (data.sessionId && data.sessionId !== currentSessionId) {
                 currentSessionId = data.sessionId;
-                document.getElementById('sessionId').textContent = `会话：${currentSessionId.slice(0, 8)}...`;
                 loadSessions();
               }
             } else if (data.type === 'error') {
@@ -542,12 +516,10 @@ async function sendMessage() {
         }
       }
     }
-
   } catch (error) {
-    // 确保思考动画被移除
     const thinkingIndicator = contentDiv.querySelector('.thinking-indicator');
     if (thinkingIndicator) thinkingIndicator.remove();
-    contentDiv.innerHTML = `❌ 请求失败：${error.message}`;
+    contentDiv.innerHTML = `请求失败：${escapeHtml(error.message)}`;
     sourcesDiv.style.display = 'none';
   } finally {
     isLoading = false;
@@ -555,136 +527,27 @@ async function sendMessage() {
   }
 }
 
-/**
- * 创建助手消息容器
- */
-function createAssistantMessage() {
-  const messages = document.getElementById('chatMessages');
+/* ===== Input ===== */
 
-  // 移除空状态
-  const emptyState = messages.querySelector('.empty-state');
-  if (emptyState) {
-    emptyState.remove();
-  }
-
-  const messageDiv = document.createElement('div');
-  messageDiv.className = 'message assistant';
-  messageDiv.style.maxHeight = 'none';
-  messageDiv.style.overflowY = 'visible';
-
-  const contentDiv = document.createElement('div');
-  contentDiv.className = 'markdown-content';
-  messageDiv.appendChild(contentDiv);
-
-  // 添加思考动画
-  const thinkingDiv = document.createElement('div');
-  thinkingDiv.className = 'thinking-indicator';
-  thinkingDiv.innerHTML = `
-    <span class="thinking-text">正在思考</span>
-    <span class="dot"></span>
-    <span class="dot"></span>
-    <span class="dot"></span>
-  `;
-  contentDiv.appendChild(thinkingDiv);
-
-  const sourcesDiv = document.createElement('div');
-  sourcesDiv.className = 'sources';
-  sourcesDiv.style.display = 'none';
-  messageDiv.appendChild(sourcesDiv);
-
-  messages.appendChild(messageDiv);
-  messages.scrollTop = messages.scrollHeight;
-
-  return messageDiv;
-}
-
-/**
- * 添加消息到聊天
- */
-function addMessage(text, role) {
-  const messages = document.getElementById('chatMessages');
-
-  // 移除空状态
-  const emptyState = messages.querySelector('.empty-state');
-  if (emptyState) {
-    emptyState.remove();
-  }
-
-  const messageDiv = document.createElement('div');
-  messageDiv.className = `message ${role}`;
-
-  if (role === 'user') {
-    messageDiv.textContent = text;
-  } else {
-    const contentDiv = document.createElement('div');
-    contentDiv.className = 'markdown-content';
-    contentDiv.innerHTML = marked.parse(text);
-    messageDiv.appendChild(contentDiv);
-  }
-
-  messages.appendChild(messageDiv);
-  messages.scrollTop = messages.scrollHeight;
-}
-
-/**
- * 处理回车发送
- */
-function handleKeyPress(event) {
+function handleKeyDown(event) {
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault();
     sendMessage();
   }
 }
 
-/**
- * 更新发送按钮状态
- */
+function autoResize(textarea) {
+  textarea.style.height = 'auto';
+  textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
+}
+
 function updateSendButton() {
   const btn = document.getElementById('sendBtn');
   btn.disabled = isLoading;
-  btn.textContent = isLoading ? '思考中...' : '发送';
 }
 
-/**
- * HTML 转义
- */
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
+/* ===== Model Status ===== */
 
-/**
- * 刷新文档列表
- */
-function refreshDocuments() {
-  loadDocuments();
-  updateStats();
-}
-
-/**
- * 更新统计信息
- */
-async function updateStats() {
-  try {
-    const response = await fetch('/api/stats');
-    const stats = await response.json();
-
-    const statsDiv = document.getElementById('stats');
-    statsDiv.innerHTML = `
-      <strong>📊 统计信息</strong><br>
-      文档：${stats.vectorStore.totalFiles} |
-      向量：${stats.vectorStore.totalChunks} |
-      会话：${stats.chatHistory.totalSessions}
-    `;
-  } catch (error) {
-    console.error('Failed to update stats:', error);
-  }
-}
-
-/**
- * 检查模型状态
- */
 async function checkModelStatus() {
   const statusDiv = document.getElementById('modelStatus');
   const warmupBtn = document.getElementById('warmupBtn');
@@ -704,32 +567,25 @@ async function checkModelStatus() {
       statusDiv.querySelector('.model-status-text').textContent = `${status.model} 未加载`;
       warmupBtn.style.display = 'inline-block';
     }
-
-    updateUploadState();
   } catch (error) {
     statusDiv.className = 'model-status error';
-    statusDiv.querySelector('.model-status-text').textContent = '无法连接模型服务';
+    statusDiv.querySelector('.model-status-text').textContent = '无法连接';
     warmupBtn.style.display = 'none';
     modelLoaded = false;
-    updateUploadState();
   }
 }
 
-/**
- * 预热/加载模型
- */
 async function warmupModel() {
   const statusDiv = document.getElementById('modelStatus');
   const warmupBtn = document.getElementById('warmupBtn');
 
   statusDiv.className = 'model-status loading';
-  statusDiv.querySelector('.model-status-text').textContent = '正在加载模型（首次可能需要 1-2 分钟）...';
+  statusDiv.querySelector('.model-status-text').textContent = '加载模型中...';
   warmupBtn.disabled = true;
-  warmupBtn.textContent = '加载中...';
+  warmupBtn.textContent = '加载中';
 
   try {
     const response = await fetch('/api/model/warmup', { method: 'POST' });
-
     if (!response.ok) {
       const err = await response.json();
       throw new Error(err.error || '加载失败');
@@ -742,30 +598,37 @@ async function warmupModel() {
     warmupBtn.style.display = 'none';
   } catch (error) {
     statusDiv.className = 'model-status error';
-    statusDiv.querySelector('.model-status-text').textContent = `加载失败：${error.message}`;
+    statusDiv.querySelector('.model-status-text').textContent = `加载失败`;
     warmupBtn.disabled = false;
     warmupBtn.textContent = '重试';
   }
-
-  updateUploadState();
 }
 
-/**
- * 根据模型状态更新上传区域
- */
-function updateUploadState() {
-  const uploadArea = document.getElementById('uploadArea');
-  const sendBtn = document.getElementById('sendBtn');
+/* ===== Utils ===== */
 
-  if (!modelLoaded) {
-    uploadArea.style.opacity = '0.5';
-    uploadArea.style.pointerEvents = 'none';
-    uploadArea.title = '请先启动模型';
-    sendBtn.title = '请先启动模型';
-  } else {
-    uploadArea.style.opacity = '1';
-    uploadArea.style.pointerEvents = 'auto';
-    uploadArea.title = '';
-    sendBtn.title = '';
-  }
+function formatSessionTitle(session) {
+  const date = new Date(session.updatedAt);
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+  const time = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  if (isToday) return `对话 ${time}`;
+  return `对话 ${date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })} ${time}`;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function showNotification(message, type = 'info') {
+  const notification = document.createElement('div');
+  notification.className = `notification notification-${type}`;
+  notification.textContent = message;
+  document.body.appendChild(notification);
+
+  setTimeout(() => {
+    notification.style.animation = 'slideOut 0.25s ease';
+    setTimeout(() => notification.remove(), 250);
+  }, 3000);
 }
