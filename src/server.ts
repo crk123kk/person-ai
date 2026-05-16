@@ -353,6 +353,111 @@ export async function startServer(port: number): Promise<void> {
     }
   });
 
+  // ===== OpenAI 兼容 API（对外公开，供外部网站/Postman 调用）=====
+
+  // 模型列表
+  app.get('/v1/models', (_req, res) => {
+    res.json({
+      object: 'list',
+      data: [{
+        id: 'rag-assistant',
+        object: 'model',
+        created: Math.floor(Date.now() / 1000),
+        owned_by: 'local',
+      }],
+    });
+  });
+
+  // Chat Completions（OpenAI 兼容，支持流式和非流式）
+  app.post('/v1/chat/completions', async (req, res) => {
+    try {
+      const { messages, stream, sessionId } = req.body;
+
+      // 从 messages 数组提取最后一条用户消息
+      const lastUserMsg = [...(messages || [])].reverse().find((m: any) => m.role === 'user');
+      if (!lastUserMsg?.content) {
+        return res.status(400).json({ error: { message: 'messages 中需要至少一条 role=user 的消息' } });
+      }
+
+      const query = lastUserMsg.content;
+      const chatId = `chatcmpl-${uuidv4().replace(/-/g, '')}`;
+      const created = Math.floor(Date.now() / 1000);
+
+      logger.info(`OpenAI API request: ${query} (stream=${!!stream})`);
+
+      if (stream) {
+        // SSE 流式响应
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no');
+
+        const heartbeat = setInterval(() => {
+          res.write(': heartbeat\n\n');
+        }, 10000);
+
+        try {
+          const ragStream = rag.chatStream(query, sessionId);
+
+          for await (const event of ragStream) {
+            if (event.type === 'token' && event.token) {
+              res.write(`data: ${JSON.stringify({
+                id: chatId,
+                object: 'chat.completion.chunk',
+                created,
+                model: 'rag-assistant',
+                choices: [{
+                  index: 0,
+                  delta: { content: event.token },
+                  finish_reason: null,
+                }],
+              })}\n\n`);
+            } else if (event.type === 'done') {
+              res.write(`data: ${JSON.stringify({
+                id: chatId,
+                object: 'chat.completion.chunk',
+                created,
+                model: 'rag-assistant',
+                choices: [{
+                  index: 0,
+                  delta: {},
+                  finish_reason: 'stop',
+                }],
+              })}\n\n`);
+              res.write('data: [DONE]\n\n');
+            }
+          }
+        } finally {
+          clearInterval(heartbeat);
+        }
+
+        res.end();
+      } else {
+        // 非流式响应
+        const result = await rag.chat(query, sessionId);
+        res.json({
+          id: chatId,
+          object: 'chat.completion',
+          created,
+          model: 'rag-assistant',
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: result.answer },
+            finish_reason: 'stop',
+          }],
+          usage: {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+          },
+        });
+      }
+    } catch (error) {
+      logger.error('OpenAI API error:', error);
+      res.status(500).json({ error: { message: error instanceof Error ? error.message : '请求失败' } });
+    }
+  });
+
   // 静态文件服务（前端页面）
   const webPath = path.join(__dirname, '../web');
   app.use(express.static(webPath));
