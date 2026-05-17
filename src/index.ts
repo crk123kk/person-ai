@@ -18,10 +18,10 @@ async function main(): Promise<void> {
 
   // 启动服务器
   try {
-    await startServer(config.port);
-    logger.info(`Server started on http://localhost:${config.port}`);
+    const actualPort = await startServer(config.port);
+    logger.info(`Server started on http://localhost:${actualPort}`);
     console.log(`\n🚀 RAG Assistant 已启动`);
-    console.log(`📍 访问地址：http://localhost:${config.port}\n`);
+    console.log(`📍 访问地址：http://localhost:${actualPort}\n`);
   } catch (error) {
     logger.error('Failed to start server:', error);
     process.exit(1);

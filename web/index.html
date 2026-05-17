@@ -80,62 +80,52 @@
     /* ===== Sidebar ===== */
     .sidebar {
       width: var(--sidebar-width);
-      min-width: var(--sidebar-width);
+      min-width: 200px;
+      max-width: 480px;
       background: var(--sidebar-bg);
       border-right: 1px solid var(--border-color);
       display: flex;
       flex-direction: column;
       transition: margin-left 0.2s ease, opacity 0.2s ease;
       overflow: hidden;
+      position: relative;
     }
 
     .sidebar.collapsed {
-      margin-left: calc(-1 * var(--sidebar-width));
+      margin-left: calc(-1 * var(--sidebar-width) - 3px);
       opacity: 0;
       pointer-events: none;
     }
 
-    .sidebar-header {
-      padding: 12px;
-      display: flex;
-      gap: 8px;
-    }
-
-    .new-chat-btn {
-      flex: 1;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 14px;
-      background: var(--main-bg);
-      border: 1px solid var(--border-color);
-      border-radius: 10px;
-      cursor: pointer;
-      font-size: 0.875rem;
-      color: var(--text-primary);
+    .sidebar-resize-handle {
+      position: absolute;
+      right: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      cursor: col-resize;
+      z-index: 10;
+      background: transparent;
       transition: background 0.15s;
     }
 
-    .new-chat-btn:hover {
-      background: var(--hover-bg);
-    }
-
-    .new-chat-btn svg {
-      width: 18px;
-      height: 18px;
+    .sidebar-resize-handle:hover,
+    .sidebar-resize-handle.dragging {
+      background: var(--accent);
     }
 
     .sidebar-toggle-btn {
       display: flex;
       align-items: center;
       justify-content: center;
-      width: 38px;
-      height: 38px;
+      width: 30px;
+      height: 30px;
       background: none;
       border: none;
-      border-radius: 8px;
+      border-radius: 6px;
       cursor: pointer;
       color: var(--text-secondary);
+      flex-shrink: 0;
       transition: background 0.15s;
     }
 
@@ -148,10 +138,278 @@
       height: 18px;
     }
 
-    .conversation-list {
+    .kb-list-section {
+      padding: 8px 0 4px;
+    }
+
+    .kb-list-header {
+      display: flex;
+      align-items: center;
+      padding: 6px 12px;
+      cursor: pointer;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      user-select: none;
+      transition: background 0.15s;
+      gap: 6px;
+    }
+
+    .kb-list-header:hover {
+      background: var(--hover-bg);
+    }
+
+    .kb-list-header svg {
+      width: 14px;
+      height: 14px;
+      transition: transform 0.2s;
+    }
+
+    .kb-list-header.collapsed svg {
+      transform: rotate(-90deg);
+    }
+
+    .kb-list-items {
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .kb-list-items.collapsed {
+      display: none;
+    }
+
+    .kb-list-item {
+      display: flex;
+      align-items: center;
+      padding: 8px 12px 8px 28px;
+      cursor: pointer;
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+      transition: background 0.15s, color 0.15s;
+      gap: 6px;
+    }
+
+    .kb-list-item:hover {
+      background: var(--hover-bg);
+      color: var(--text-primary);
+    }
+
+    .kb-list-item.active {
+      background: var(--active-bg);
+      color: var(--text-primary);
+      font-weight: 500;
+    }
+
+    .kb-list-item .kb-item-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .kb-list-item .kb-item-delete {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border: none;
+      background: none;
+      border-radius: 4px;
+      cursor: pointer;
+      color: var(--text-muted);
+      flex-shrink: 0;
+      visibility: hidden;
+      opacity: 0;
+      transition: visibility 0.1s, opacity 0.1s, color 0.15s, background 0.15s;
+    }
+
+    .kb-list-item:hover .kb-item-delete {
+      visibility: visible;
+      opacity: 1;
+    }
+
+    .kb-list-item .kb-item-delete:hover {
+      color: var(--danger);
+      background: rgba(239, 65, 70, 0.1);
+    }
+
+    .kb-list-item .kb-item-delete svg {
+      width: 12px;
+      height: 12px;
+    }
+
+    /* Shared section styles */
+    .kb-docs-section,
+    .conversation-section {
+      padding: 4px 0;
+    }
+
+    .kb-list-section + .kb-docs-section,
+    .kb-docs-section + .conversation-section {
+      border-top: 1px solid var(--border-color);
+    }
+
+    .kb-docs-header,
+    .conversation-section-header {
+      display: flex;
+      align-items: center;
+      padding: 6px 12px;
+      cursor: pointer;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      user-select: none;
+      transition: background 0.15s;
+      gap: 6px;
+    }
+
+    .kb-docs-header:hover,
+    .conversation-section-header:hover {
+      background: var(--hover-bg);
+    }
+
+    .kb-docs-header svg,
+    .conversation-section-header svg {
+      width: 14px;
+      height: 14px;
+      transition: transform 0.2s;
+    }
+
+    .kb-docs-header.collapsed svg,
+    .conversation-section-header.collapsed svg {
+      transform: rotate(-90deg);
+    }
+
+    .section-add-icon-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      border: none;
+      background: none;
+      border-radius: 4px;
+      cursor: pointer;
+      color: var(--text-muted);
+      flex-shrink: 0;
+      transition: color 0.15s, background 0.15s;
+    }
+
+    .section-add-icon-btn:hover {
+      color: var(--accent);
+      background: rgba(16, 163, 127, 0.1);
+    }
+
+    .kb-docs-list {
+      max-height: 180px;
+      overflow-y: auto;
+    }
+
+    .kb-docs-list.collapsed {
+      display: none;
+    }
+
+    .kb-doc-item {
+      display: flex;
+      align-items: center;
+      padding: 6px 12px 6px 28px;
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      gap: 6px;
+    }
+
+    .kb-doc-item .doc-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .kb-doc-item .doc-chunks {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    .kb-doc-item .doc-delete-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border: none;
+      background: none;
+      border-radius: 4px;
+      cursor: pointer;
+      color: var(--text-muted);
+      flex-shrink: 0;
+      visibility: hidden;
+      opacity: 0;
+      transition: visibility 0.1s, opacity 0.1s;
+    }
+
+    .kb-doc-item:hover .doc-delete-btn {
+      visibility: visible;
+      opacity: 1;
+    }
+
+    .kb-doc-item .doc-delete-btn:hover {
+      color: var(--danger);
+      background: rgba(239, 65, 70, 0.1);
+    }
+
+    .section-add-area {
+      padding: 4px 12px;
+    }
+
+    .section-add-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      padding: 6px 0;
+      border: 1px dashed var(--border-color);
+      border-radius: 8px;
+      background: none;
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+
+    .section-add-btn:hover {
+      background: var(--hover-bg);
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .kb-docs-empty {
+      padding: 8px 12px 8px 28px;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .conversation-section {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .conversation-section .conversation-list {
       flex: 1;
       overflow-y: auto;
       padding: 4px 8px;
+    }
+
+    .conversation-list.collapsed {
+      display: none;
     }
 
     .conversation-list::-webkit-scrollbar {
@@ -201,7 +459,7 @@
     }
 
     .conversation-item .delete-btn {
-      display: none;
+      display: flex;
       align-items: center;
       justify-content: center;
       width: 28px;
@@ -212,11 +470,14 @@
       cursor: pointer;
       color: var(--text-muted);
       flex-shrink: 0;
-      transition: color 0.15s, background 0.15s;
+      visibility: hidden;
+      opacity: 0;
+      transition: color 0.15s, background 0.15s, visibility 0.1s, opacity 0.1s;
     }
 
     .conversation-item:hover .delete-btn {
-      display: flex;
+      visibility: visible;
+      opacity: 1;
     }
 
     .conversation-item .delete-btn:hover {
@@ -640,6 +901,14 @@
       background: var(--send-btn-hover);
     }
 
+    .send-btn.stop-btn {
+      background: var(--danger);
+    }
+
+    .send-btn.stop-btn:hover {
+      background: #d63031;
+    }
+
     .send-btn svg {
       width: 16px;
       height: 16px;
@@ -807,24 +1076,80 @@
   <div class="app">
     <!-- Sidebar -->
     <aside class="sidebar" id="sidebar">
-      <div class="sidebar-header">
-        <button class="new-chat-btn" onclick="startNewChat()">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
+      <div class="sidebar-resize-handle" id="sidebarResizeHandle"></div>
+
+      <div class="kb-list-section">
+        <div class="kb-list-header">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" onclick="toggleKbList()">
+            <polyline points="6 9 12 15 18 9"></polyline>
           </svg>
-          新对话
-        </button>
-        <button class="sidebar-toggle-btn" onclick="toggleSidebar()" title="收起侧栏">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="3" y="3" width="18" height="18" rx="2"></rect>
-            <line x1="9" y1="3" x2="9" y2="21"></line>
-          </svg>
-        </button>
+          <span style="flex:1;" onclick="toggleKbList()">知识库</span>
+          <span id="kbCount" style="font-weight:400;" onclick="toggleKbList()">0</span>
+          <button class="section-add-icon-btn" onclick="event.stopPropagation(); createKb()" title="新建知识库">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+          </button>
+        </div>
+        <div class="kb-list-items" id="kbListItems">
+          <!-- KB items rendered by JS -->
+        </div>
+        <div class="section-add-area">
+          <button class="section-add-btn" onclick="createKb()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            添加知识库
+          </button>
+        </div>
       </div>
 
-      <div class="conversation-list" id="conversationList">
-        <!-- Conversation items rendered by JS -->
+      <div class="kb-docs-section" id="kbDocsSection">
+        <div class="kb-docs-header" id="kbDocsHeader">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" onclick="toggleDocsPanel()">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+          <span style="flex:1;" onclick="toggleDocsPanel()">知识库文档</span>
+          <span id="kbDocsCount" style="font-weight:400;" onclick="toggleDocsPanel()">0</span>
+          <button class="section-add-icon-btn" onclick="event.stopPropagation(); document.getElementById('fileInput').click()" title="添加文档">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+          </button>
+        </div>
+        <div class="kb-docs-list" id="kbDocsList">
+          <div class="kb-docs-empty">暂无文档</div>
+        </div>
+        <div class="section-add-area">
+          <button class="section-add-btn" onclick="document.getElementById('fileInput').click()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            添加文档
+          </button>
+        </div>
+      </div>
+
+      <div class="conversation-section" id="conversationSection">
+        <div class="conversation-section-header" id="conversationHeader">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" onclick="toggleConversationList()">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+          <span style="flex:1;" onclick="toggleConversationList()">对话</span>
+          <button class="section-add-icon-btn" onclick="event.stopPropagation(); startNewChat()" title="新对话">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+          </button>
+        </div>
+        <div class="conversation-list" id="conversationList">
+          <!-- Conversation items rendered by JS -->
+        </div>
       </div>
 
       <div class="sidebar-footer">
@@ -845,10 +1170,18 @@
           </svg>
           <span id="themeLabel">暗夜模式</span>
         </button>
-        <div id="modelStatus" class="model-status">
-          <span class="model-status-dot"></span>
-          <span class="model-status-text">检测模型中...</span>
-          <button id="warmupBtn" class="warmup-btn" onclick="warmupModel()" style="display:none;">启动</button>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <div id="modelStatus" class="model-status" style="flex:1;">
+            <span class="model-status-dot"></span>
+            <span class="model-status-text">检测模型中...</span>
+            <button id="warmupBtn" class="warmup-btn" onclick="warmupModel()" style="display:none;">启动</button>
+          </div>
+          <button class="sidebar-toggle-btn" onclick="toggleSidebar()" title="收起侧栏">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+              <line x1="9" y1="3" x2="9" y2="21"></line>
+            </svg>
+          </button>
         </div>
       </div>
     </aside>
@@ -899,9 +1232,12 @@
             onkeydown="handleKeyDown(event)"
             oninput="autoResize(this)"
           ></textarea>
-          <button class="send-btn" id="sendBtn" onclick="sendMessage()" title="发送">
-            <svg viewBox="0 0 24 24" fill="currentColor">
+          <button class="send-btn" id="sendBtn" onclick="handleSendOrStop()" title="发送">
+            <svg class="send-icon" viewBox="0 0 24 24" fill="currentColor">
               <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z"/>
+            </svg>
+            <svg class="stop-icon" viewBox="0 0 24 24" fill="currentColor" style="display:none;">
+              <rect x="6" y="6" width="12" height="12" rx="2"></rect>
             </svg>
           </button>
         </div>

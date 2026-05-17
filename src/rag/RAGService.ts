@@ -10,6 +10,7 @@ import { VectorStoreService, VectorMetadata } from './VectorStoreService.js';
 import { LLMProviderFactory, LLMRouter, LLMProviderType } from '../models/LLMProvider.js';
 import { config } from '../utils/config.js';
 import logger from '../utils/logger.js';
+import path from 'path';
 import { ProgressManager } from '../utils/UploadProgress.js';
 
 /**
@@ -61,18 +62,29 @@ export class RAGService {
   private chatHistory: ChatHistoryManager;
   private circuitBreaker: CircuitBreaker;
 
-  constructor() {
-    logger.info('Initializing RAG service...');
+  constructor(kbId?: string) {
+    logger.info(`Initializing RAG service${kbId ? ` for KB: ${kbId}` : ''}...`);
 
-    this.embeddingService = new EmbeddingService();
-    this.vectorStore = new VectorStoreService(this.embeddingService.getInstance());
+    this.embeddingService = EmbeddingService.getInstance();
+
+    if (kbId) {
+      const kbBase = path.resolve(config.dataDir, 'knowledge-bases', kbId);
+      this.vectorStore = new VectorStoreService(
+        this.embeddingService.getEmbeddings(),
+        path.join(kbBase, 'vectorstore', 'memory-store.json')
+      );
+      this.chatHistory = new ChatHistoryManager(path.join(kbBase, 'chat-history'));
+    } else {
+      this.vectorStore = new VectorStoreService(this.embeddingService.getEmbeddings());
+      this.chatHistory = new ChatHistoryManager();
+    }
+
     this.llmRouter = new LLMRouter(config.llmProvider, ['anthropic', 'ollama', 'openai'].filter(p => p !== config.llmProvider) as LLMProviderType[]);
     this.queryCache = new QueryCache({ ttl: config.queryCacheTtl });
     this.contextManager = new ContextManager({ strategy: config.contextStrategy });
-    this.chatHistory = new ChatHistoryManager();
     this.circuitBreaker = new CircuitBreaker();
 
-    logger.info('RAG service initialized');
+    logger.info(`RAG service initialized${kbId ? ` for KB: ${kbId}` : ''}`);
   }
 
   /**
@@ -129,48 +141,81 @@ export class RAGService {
     const stats = ChunkStatsCalculator.calculate(chunks);
     ChunkStatsCalculator.logStats(stats, filePath);
 
-    // Step 4: 向量化（带进度）
-    if (progressManager) {
-      progressManager.updateStage(fid, 'embed', { status: 'processing', progress: 0 });
+    // Step 4+5: 分批向量化 + 存储（流式处理，避免内存堆积和二次嵌入）
+    // Filter out empty chunks that can cause Ollama to return NaN
+    const nonEmptyChunks = chunks.filter(c => c.pageContent && c.pageContent.trim());
+    if (nonEmptyChunks.length < chunks.length) {
+      logger.warn(`Filtered ${chunks.length - nonEmptyChunks.length} empty chunks before embedding`);
     }
-    const texts = chunks.map(c => c.pageContent);
-    const vectors = await this.embeddingService.embedDocuments(texts, (progress) => {
+
+    if (progressManager) {
+      progressManager.updateStage(fid, 'embed', { status: 'processing', progress: 0, message: `向量化中：0/${nonEmptyChunks.length}` });
+    }
+
+    const BATCH_SIZE = 20; // 每批处理 20 个 chunk：嵌入 → 立即存储 → 释放内存
+    const allVectorIds: string[] = [];
+    let globalChunkIdx = 0;
+
+    for (let batchStart = 0; batchStart < nonEmptyChunks.length; batchStart += BATCH_SIZE) {
+      const batchEnd = Math.min(batchStart + BATCH_SIZE, nonEmptyChunks.length);
+      const batchChunks = nonEmptyChunks.slice(batchStart, batchEnd);
+      const batchTexts = batchChunks.map(c => c.pageContent);
+      const batchNum = Math.floor(batchStart / BATCH_SIZE) + 1;
+
+      // Step 4: 嵌入当前批次
+      const batchVectors = await this.embeddingService.embedDocuments(batchTexts);
+
+      const embedPercent = Math.round((batchEnd / nonEmptyChunks.length) * 100);
       if (progressManager) {
-        progressManager.updateStage(fid, 'embed', { progress, message: `向量化中：${progress}%` });
+        progressManager.updateStage(fid, 'embed', { progress: embedPercent, message: `向量化：${batchEnd}/${nonEmptyChunks.length}` });
       }
-    });
-    logger.info(`[Pipeline] Embedded ${vectors.length} vectors`);
 
-    // Step 5: 存储向量
-    if (progressManager) {
-      progressManager.updateStage(fid, 'store', { status: 'processing', progress: 0 });
-    }
-    const chunksWithMetadata = chunks.map((chunk, idx) => {
-      const meta: VectorMetadata = {
-        source: filePath,
-        displayName,
-        chunkIndex: idx,
-        totalChunks: chunks.length,
-        fileType,
-        uploadTime: loaded.metadata.uploadTime,
-      };
-      return new Document({
-        pageContent: chunk.pageContent,
-        metadata: { ...chunk.metadata, ...meta },
+      // 构建带元数据的文档
+      const batchDocs = batchChunks.map((chunk) => {
+        const meta: VectorMetadata = {
+          source: filePath,
+          displayName,
+          chunkIndex: globalChunkIdx,
+          totalChunks: nonEmptyChunks.length,
+          fileType,
+          uploadTime: loaded.metadata.uploadTime,
+        };
+        globalChunkIdx++;
+        return new Document({
+          pageContent: chunk.pageContent,
+          metadata: { ...chunk.metadata, ...meta },
+        });
       });
-    });
 
-    const ids = chunksWithMetadata.map((_, idx) => `${VectorStoreService.sanitizeId(filePath)}_${idx}`);
-    const vectorIds = await this.vectorStore.addDocuments(chunksWithMetadata, { ids });
+      // Step 5: 存储向量（用预计算向量直接存储，避免 MemoryVectorStore 内部二次嵌入）
+      const batchIds = batchDocs.map((_, idx) => `${VectorStoreService.sanitizeId(filePath)}_${batchStart + idx}`);
+      const storedIds = await this.vectorStore.addVectors(batchVectors, batchDocs, { ids: batchIds });
+      allVectorIds.push(...storedIds);
+
+      // 更新存储进度（与向量化同步推进）
+      if (progressManager) {
+        if (batchStart === 0) {
+          progressManager.updateStage(fid, 'store', { status: 'processing', progress: 0 });
+        }
+        const storePercent = Math.round((batchEnd / nonEmptyChunks.length) * 100);
+        progressManager.updateStage(fid, 'store', { progress: storePercent, message: `存储：${batchEnd}/${nonEmptyChunks.length}` });
+      }
+
+      // 日志输出整体进度（与前端进度条数值一致）
+      const overall = progressManager?.getProgress(fid)?.overallProgress ?? embedPercent;
+      logger.info(`[Pipeline] Batch ${batchNum}: ${batchEnd}/${nonEmptyChunks.length}, overall ${overall}%`);
+    }
+
     if (progressManager) {
+      progressManager.updateStage(fid, 'embed', { status: 'completed', progress: 100 });
       progressManager.updateStage(fid, 'store', { status: 'completed', progress: 100 });
     }
-    logger.info(`[Pipeline] Stored ${vectorIds.length} vectors`);
+    logger.info(`[Pipeline] Done: ${allVectorIds.length} vectors embedded+stored`);
 
     return {
       documentId: filePath,
-      totalChunks: chunks.length,
-      vectorIds,
+      totalChunks: nonEmptyChunks.length,
+      vectorIds: allVectorIds,
       stats,
     };
   }
@@ -491,10 +536,10 @@ export class RAGService {
   }
 
   /**
-   * 列出知识库中的文档
+   * 列出知识库中的文档（含展示名称和分块数）
    */
-  async listDocuments(): Promise<string[]> {
-    return this.vectorStore.listSources();
+  async listDocuments(): Promise<{ source: string; displayName: string; chunks: number }[]> {
+    return this.vectorStore.listDocumentDetails();
   }
 
   /**

@@ -35,8 +35,8 @@ export interface ChatSession {
 export class ChatHistoryManager {
   private historyDir: string;
 
-  constructor() {
-    this.historyDir = path.resolve(config.chatHistoryDir);
+  constructor(historyDir?: string) {
+    this.historyDir = historyDir ? path.resolve(historyDir) : path.resolve(config.chatHistoryDir);
 
     // 确保目录存在
     if (!fs.existsSync(this.historyDir)) {

@@ -165,12 +165,12 @@ export class ProgressManager {
    */
   private calculateOverallProgress(progress: UploadProgress): void {
     const weights = [
-      { stage: 'upload', weight: 10 },
-      { stage: 'load', weight: 15 },
-      { stage: 'clean', weight: 15 },
-      { stage: 'split', weight: 20 },
-      { stage: 'embed', weight: 25 },
-      { stage: 'store', weight: 15 },
+      { stage: 'upload', weight: 2 },
+      { stage: 'load', weight: 3 },
+      { stage: 'clean', weight: 3 },
+      { stage: 'split', weight: 2 },
+      { stage: 'embed', weight: 85 },
+      { stage: 'store', weight: 5 },
     ];
 
     let totalProgress = 0;

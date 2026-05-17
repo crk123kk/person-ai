@@ -1,18 +1,76 @@
 /**
- * RAG Assistant - ChatGPT-style frontend
+ * RAG Assistant - Multi knowledge base frontend
  */
 
+let currentKbId = '';
 let currentSessionId = '';
 let isLoading = false;
 let modelLoaded = false;
 let sessionsData = [];
+let kbList = [];
+let currentAbortController = null;
+let chatRequestId = 0;
+const uploadStates = new Map(); // kbId -> { eventSource, latestProgress }
 
 // Init
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
-  loadSessions();
+  initSidebarResize();
+  loadKnowledgeBases();
   checkModelStatus();
 });
+
+/* ===== Sidebar Resize ===== */
+
+function initSidebarResize() {
+  const sidebar = document.getElementById('sidebar');
+  const handle = document.getElementById('sidebarResizeHandle');
+  if (!sidebar || !handle) return;
+
+  // 恢复保存的宽度
+  const saved = localStorage.getItem('sidebarWidth');
+  if (saved) {
+    const w = parseInt(saved);
+    if (w >= 200 && w <= 480) {
+      sidebar.style.setProperty('--sidebar-width', w + 'px');
+    }
+  }
+
+  let dragging = false;
+  let startX = 0;
+  let startWidth = 0;
+
+  handle.addEventListener('mousedown', function(e) {
+    dragging = true;
+    startX = e.clientX;
+    startWidth = sidebar.offsetWidth;
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', function(e) {
+    if (!dragging) return;
+    const delta = e.clientX - startX;
+    const newWidth = Math.min(480, Math.max(200, startWidth + delta));
+    sidebar.style.setProperty('--sidebar-width', newWidth + 'px');
+  });
+
+  document.addEventListener('mouseup', function() {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    const width = sidebar.offsetWidth;
+    if (width >= 200 && width <= 480) {
+      localStorage.setItem('sidebarWidth', width);
+    }
+  });
+}
+
+/* ===== Theme ===== */
 
 /* ===== Theme ===== */
 
@@ -51,23 +109,242 @@ function updateThemeUI(isDark) {
   }
 }
 
+/* ===== Knowledge Base Management ===== */
+
+async function loadKnowledgeBases() {
+  try {
+    const response = await fetch('/api/kb');
+    const data = await response.json();
+    kbList = data.knowledgeBases || [];
+
+    // Auto-select first KB or restore saved
+    const savedKb = localStorage.getItem('currentKbId');
+    if (savedKb && kbList.find(kb => kb.id === savedKb)) {
+      currentKbId = savedKb;
+    } else if (kbList.length > 0) {
+      currentKbId = kbList[0].id;
+    }
+
+    renderKbList();
+    if (currentKbId) {
+      loadSessions();
+      loadDocs();
+    }
+  } catch (error) {
+    console.error('Failed to load knowledge bases:', error);
+  }
+}
+
+function renderKbList() {
+  const countEl = document.getElementById('kbCount');
+  const listEl = document.getElementById('kbListItems');
+  if (countEl) countEl.textContent = kbList.length;
+
+  if (kbList.length === 0) {
+    listEl.innerHTML = '<div style="padding: 8px 12px 8px 28px; font-size: 0.75rem; color: var(--text-muted);">暂无知识库</div>';
+    return;
+  }
+
+  let html = '';
+  for (const kb of kbList) {
+    const isActive = kb.id === currentKbId;
+    html += `
+      <div class="kb-list-item ${isActive ? 'active' : ''}" onclick="selectKb('${kb.id}')">
+        <span class="kb-item-name">${escapeHtml(kb.name)}</span>
+        <button class="kb-item-delete" onclick="event.stopPropagation(); deleteKb('${kb.id}')" title="删除">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    `;
+  }
+  listEl.innerHTML = html;
+}
+
+function toggleKbList() {
+  const header = document.querySelector('.kb-list-header');
+  const list = document.getElementById('kbListItems');
+  header.classList.toggle('collapsed');
+  list.classList.toggle('collapsed');
+}
+
+function showUploadProgressForKb(kbId) {
+  const state = uploadStates.get(kbId);
+  const progressContainer = document.getElementById('uploadProgress');
+  if (state && state.latestProgress) {
+    progressContainer.classList.add('active');
+    updateProgressUI(state.latestProgress);
+  } else {
+    progressContainer.classList.remove('active');
+  }
+}
+
+function updateProgressUI(progress) {
+  document.getElementById('uploadProgressFill').style.width = `${progress.overallProgress}%`;
+  document.getElementById('uploadProgressPercent').textContent = `${progress.overallProgress}%`;
+  const currentStage = progress.stages.find(function(s) { return s.status === 'processing'; }) ||
+                       progress.stages.find(function(s) { return s.status === 'pending'; });
+  if (currentStage) document.getElementById('uploadProgressStage').textContent = currentStage.message || currentStage.name;
+}
+
+async function selectKb(kbId) {
+  showUploadProgressForKb(kbId);
+
+  currentKbId = kbId;
+  currentSessionId = '';
+  localStorage.setItem('currentKbId', kbId);
+
+  renderKbList();
+  showWelcomeScreen();
+  loadSessions();
+  loadDocs();
+}
+
+async function createKb() {
+  const name = prompt('输入知识库名称：');
+  if (!name || !name.trim()) return;
+
+  try {
+    const response = await fetch('/api/kb', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    const kb = await response.json();
+
+    if (kb.id) {
+      currentKbId = kb.id;
+      localStorage.setItem('currentKbId', kb.id);
+      await loadKnowledgeBases();
+      showWelcomeScreen();
+      showNotification(`知识库「${name}」已创建`, 'success');
+    }
+  } catch (error) {
+    showNotification('创建知识库失败', 'error');
+  }
+}
+
+async function deleteKb(kbId) {
+  const kb = kbList.find(k => k.id === kbId);
+  if (!confirm(`确定要删除知识库「${kb?.name || kbId}」吗？所有文档和对话将被删除。`)) return;
+
+  try {
+    await fetch(`/api/kb/${kbId}`, { method: 'DELETE' });
+
+    if (currentKbId === kbId) {
+      currentKbId = '';
+      currentSessionId = '';
+    }
+
+    await loadKnowledgeBases();
+
+    if (!currentKbId && kbList.length > 0) {
+      currentKbId = kbList[0].id;
+      localStorage.setItem('currentKbId', currentKbId);
+      renderKbList();
+    }
+
+    showWelcomeScreen();
+    loadSessions();
+    showNotification('知识库已删除', 'success');
+  } catch (error) {
+    showNotification('删除失败', 'error');
+  }
+}
+
+/* ===== KB Documents Panel ===== */
+
+function toggleDocsPanel() {
+  const header = document.getElementById('kbDocsHeader');
+  const list = document.getElementById('kbDocsList');
+  header.classList.toggle('collapsed');
+  list.classList.toggle('collapsed');
+}
+
+function toggleConversationList() {
+  const header = document.getElementById('conversationHeader');
+  const list = document.getElementById('conversationList');
+  header.classList.toggle('collapsed');
+  list.classList.toggle('collapsed');
+}
+
+async function loadDocs() {
+  if (!currentKbId) {
+    document.getElementById('kbDocsCount').textContent = '0';
+    document.getElementById('kbDocsList').innerHTML = '<div class="kb-docs-empty">暂无文档</div>';
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/${currentKbId}/documents`);
+    const data = await response.json();
+    const docs = data.documents || [];
+
+    document.getElementById('kbDocsCount').textContent = docs.length;
+
+    if (docs.length === 0) {
+      document.getElementById('kbDocsList').innerHTML = '<div class="kb-docs-empty">暂无文档</div>';
+      return;
+    }
+
+    let html = '';
+    for (const doc of docs) {
+      const name = escapeHtml(doc.displayName || doc.source);
+      const safeSource = encodeURIComponent(doc.source);
+      html += `
+        <div class="kb-doc-item">
+          <span class="doc-name" title="${name}">${name}</span>
+          <span class="doc-chunks">${doc.chunks} 块</span>
+          <button class="doc-delete-btn" onclick="event.stopPropagation(); deleteDocument('${safeSource}')" title="删除文档">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+      `;
+    }
+    document.getElementById('kbDocsList').innerHTML = html;
+  } catch (error) {
+    console.error('Failed to load docs:', error);
+  }
+}
+
+async function deleteDocument(source) {
+  if (!currentKbId) return;
+  const name = decodeURIComponent(source).split(/[\\/]/).pop() || source;
+  if (!confirm(`确定要从知识库中删除「${name}」吗？`)) return;
+
+  try {
+    const response = await fetch(`/api/${currentKbId}/documents?source=${source}`, { method: 'DELETE' });
+    if (!response.ok) throw new Error('删除失败');
+    showNotification(`已删除「${name}」`, 'success');
+    loadDocs();
+  } catch (error) {
+    showNotification(`删除失败：${error.message}`, 'error');
+  }
+}
+
 /* ===== Sidebar ===== */
 
 function toggleSidebar() {
-  const sidebar = document.getElementById('sidebar');
-  sidebar.classList.toggle('collapsed');
+  document.getElementById('sidebar').classList.toggle('collapsed');
 }
 
 async function loadSessions() {
+  if (!currentKbId) return;
+
   try {
-    const response = await fetch('/api/sessions');
+    const response = await fetch(`/api/${currentKbId}/sessions`);
     const data = await response.json();
     sessionsData = data.sessions || [];
 
     const titles = await Promise.all(
       sessionsData.map(async (session) => {
         try {
-          const res = await fetch(`/api/sessions/${session.id}`);
+          const res = await fetch(`/api/${currentKbId}/sessions/${session.id}`);
           const detail = await res.json();
           const firstUserMsg = (detail.messages || []).find(m => m.role === 'user');
           return firstUserMsg ? firstUserMsg.content.slice(0, 50) : null;
@@ -90,33 +367,60 @@ async function loadSessions() {
 function renderConversationList() {
   const list = document.getElementById('conversationList');
   const groups = groupSessionsByTime(sessionsData);
+  const groupOrder = ['今天', '昨天', '最近 7 天', '更早'];
 
   let html = '';
-  for (const [label, sessions] of Object.entries(groups)) {
-    if (sessions.length === 0) continue;
+  for (const label of groupOrder) {
+    const sessions = groups[label];
+    if (!sessions || sessions.length === 0) continue;
     html += `<div class="conversation-group-label">${label}</div>`;
     for (const session of sessions) {
-      const isActive = session.id === currentSessionId;
-      const title = escapeHtml(session.firstMessage || formatSessionTitle(session));
-      html += `
-        <div class="conversation-item ${isActive ? 'active' : ''}" onclick="switchSession('${session.id}')">
-          <span class="conv-title">${title}</span>
-          <button class="delete-btn" onclick="event.stopPropagation(); deleteSession('${session.id}')" title="删除">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="3 6 5 6 21 6"></polyline>
-              <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path>
-            </svg>
-          </button>
-        </div>
-      `;
+      html += renderSessionItem(session);
+    }
+    // 在"今天"分组后插入添加对话按钮
+    if (label === '今天') {
+      html += `<div class="section-add-area">
+        <button class="section-add-btn" onclick="startNewChat()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          添加对话
+        </button>
+      </div>`;
     }
   }
 
   if (!html) {
-    html = '<div style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 0.85rem;">暂无对话</div>';
+    // 没有对话时也显示添加按钮
+    html = `<div class="section-add-area">
+      <button class="section-add-btn" onclick="startNewChat()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+        添加对话
+      </button>
+    </div>`;
   }
 
   list.innerHTML = html;
+}
+
+function renderSessionItem(session) {
+  const isActive = session.id === currentSessionId;
+  const title = escapeHtml(session.firstMessage || formatSessionTitle(session));
+  return `
+    <div class="conversation-item ${isActive ? 'active' : ''}" onclick="switchSession('${session.id}')">
+      <span class="conv-title">${title}</span>
+      <button class="delete-btn" onclick="event.stopPropagation(); deleteSession('${session.id}')" title="删除">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path>
+        </svg>
+      </button>
+    </div>
+  `;
 }
 
 function groupSessionsByTime(sessions) {
@@ -125,24 +429,14 @@ function groupSessionsByTime(sessions) {
   const yesterday = new Date(today.getTime() - 86400000);
   const weekAgo = new Date(today.getTime() - 7 * 86400000);
 
-  const groups = {
-    '今天': [],
-    '昨天': [],
-    '最近 7 天': [],
-    '更早': [],
-  };
+  const groups = { '今天': [], '昨天': [], '最近 7 天': [], '更早': [] };
 
   for (const session of sessions) {
     const date = new Date(session.updatedAt);
-    if (date >= today) {
-      groups['今天'].push(session);
-    } else if (date >= yesterday) {
-      groups['昨天'].push(session);
-    } else if (date >= weekAgo) {
-      groups['最近 7 天'].push(session);
-    } else {
-      groups['更早'].push(session);
-    }
+    if (date >= today) groups['今天'].push(session);
+    else if (date >= yesterday) groups['昨天'].push(session);
+    else if (date >= weekAgo) groups['最近 7 天'].push(session);
+    else groups['更早'].push(session);
   }
 
   return groups;
@@ -160,7 +454,7 @@ async function switchSession(sessionId) {
   renderConversationList();
 
   try {
-    const response = await fetch(`/api/sessions/${sessionId}`);
+    const response = await fetch(`/api/${currentKbId}/sessions/${sessionId}`);
     const session = await response.json();
 
     if (session.messages && session.messages.length > 0) {
@@ -176,13 +470,11 @@ async function switchSession(sessionId) {
 
 async function deleteSession(sessionId) {
   try {
-    const response = await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+    const response = await fetch(`/api/${currentKbId}/sessions/${sessionId}`, { method: 'DELETE' });
     const result = await response.json();
 
     if (result.success) {
-      if (currentSessionId === sessionId) {
-        startNewChat();
-      }
+      if (currentSessionId === sessionId) startNewChat();
       loadSessions();
     }
   } catch (error) {
@@ -194,9 +486,11 @@ async function deleteSession(sessionId) {
 
 function showWelcomeScreen() {
   const chatArea = document.getElementById('chatArea');
+  const kb = kbList.find(k => k.id === currentKbId);
   chatArea.innerHTML = `
     <div class="welcome" id="welcomeScreen">
       <h1 class="welcome-title">有什么可以帮你的？</h1>
+      ${kb ? `<p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 8px;">知识库：${escapeHtml(kb.name)}</p>` : ''}
     </div>
   `;
 }
@@ -214,8 +508,7 @@ function showChatMessages(messages) {
 function appendMessage(text, role) {
   let container = document.getElementById('messagesContainer');
   if (!container) {
-    const chatArea = document.getElementById('chatArea');
-    chatArea.innerHTML = '<div class="messages-container" id="messagesContainer"></div>';
+    document.getElementById('chatArea').innerHTML = '<div class="messages-container" id="messagesContainer"></div>';
     container = document.getElementById('messagesContainer');
   }
 
@@ -243,8 +536,7 @@ function appendMessage(text, role) {
 function createAssistantMessage() {
   let container = document.getElementById('messagesContainer');
   if (!container) {
-    const chatArea = document.getElementById('chatArea');
-    chatArea.innerHTML = '<div class="messages-container" id="messagesContainer"></div>';
+    document.getElementById('chatArea').innerHTML = '<div class="messages-container" id="messagesContainer"></div>';
     container = document.getElementById('messagesContainer');
   }
 
@@ -281,125 +573,143 @@ function scrollToBottom() {
 
 function handleFileSelect(event) {
   const files = event.target.files;
-  if (files.length > 0) {
-    uploadFile(files[0]);
-  }
+  if (files.length > 0) uploadFile(files[0]);
 }
 
 async function uploadFile(file) {
+  if (!currentKbId) {
+    showNotification('请先选择知识库', 'error');
+    return;
+  }
   if (!modelLoaded) {
     showNotification('请先启动模型再上传文件', 'error');
     return;
   }
 
+  const kbId = currentKbId;
   const formData = new FormData();
   formData.append('file', file);
 
   const progressContainer = document.getElementById('uploadProgress');
-  const progressFill = document.getElementById('uploadProgressFill');
-  const progressPercent = document.getElementById('uploadProgressPercent');
-  const progressStage = document.getElementById('uploadProgressStage');
-
   progressContainer.classList.add('active');
-  progressFill.style.width = '0%';
-  progressPercent.textContent = '0%';
-  progressStage.textContent = '上传文件中...';
+  document.getElementById('uploadProgressFill').style.width = '0%';
+  document.getElementById('uploadProgressPercent').textContent = '0%';
+  document.getElementById('uploadProgressStage').textContent = '上传文件中...';
 
   let eventSource = null;
 
   try {
-    const uploadResponse = await fetch('/api/documents', {
+    const uploadResponse = await fetch(`/api/${kbId}/documents`, {
       method: 'POST',
       body: formData,
     });
 
     const result = await uploadResponse.json();
 
-    if (!result.success) {
-      throw new Error(result.error || '上传失败');
-    }
+    if (!result.success) throw new Error(result.error || '上传失败');
 
     const fileId = result.fileId;
 
-    eventSource = subscribeToProgress(fileId, (progress) => {
-      progressFill.style.width = `${progress.overallProgress}%`;
-      progressPercent.textContent = `${progress.overallProgress}%`;
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        eventSource.close();
+        uploadStates.delete(kbId);
+        showUploadProgressForKb(currentKbId);
+        reject(new Error('处理超时'));
+      }, 600000);
 
-      const currentStage = progress.stages.find(s => s.status === 'processing') ||
-                          progress.stages.find(s => s.status === 'pending');
-      if (currentStage) {
-        progressStage.textContent = currentStage.message || currentStage.name;
-      }
+      eventSource = new EventSource(`/api/${kbId}/upload-progress/${fileId}`);
+      uploadStates.set(kbId, { eventSource, latestProgress: null });
+
+      eventSource.onmessage = (event) => {
+        try {
+          const progress = JSON.parse(event.data);
+
+          // 始终记录最新进度到 KB 状态
+          const state = uploadStates.get(kbId);
+          if (state) state.latestProgress = progress;
+
+          // 只在当前 KB 匹配时更新 DOM
+          if (kbId === currentKbId) updateProgressUI(progress);
+
+          // 检测完成/失败
+          if (progress.status === 'completed') {
+            clearTimeout(timeout); eventSource.close();
+            uploadStates.delete(kbId);
+            showUploadProgressForKb(currentKbId);
+            resolve(progress);
+          } else if (progress.status === 'failed') {
+            clearTimeout(timeout); eventSource.close();
+            uploadStates.delete(kbId);
+            showUploadProgressForKb(currentKbId);
+            reject(new Error(progress.error || '处理失败'));
+          }
+        } catch (e) { console.error('Progress parse error:', e); }
+      };
+      eventSource.onerror = () => {
+        clearTimeout(timeout); eventSource.close();
+        uploadStates.delete(kbId);
+        showUploadProgressForKb(currentKbId);
+        reject(new Error('SSE 连接中断'));
+      };
     });
 
-    await waitForProcessingComplete(fileId, eventSource);
-
-    showNotification(`文件上传成功！分块数：${result.document.chunks}`, 'success');
+    showNotification('文件上传成功！', 'success');
+    loadDocs();
   } catch (error) {
     showNotification(`上传失败：${error.message}`, 'error');
   } finally {
     if (eventSource) eventSource.close();
+    uploadStates.delete(kbId);
+    showUploadProgressForKb(currentKbId);
     document.getElementById('fileInput').value = '';
-    setTimeout(() => {
-      progressContainer.classList.remove('active');
-    }, 3000);
   }
 }
 
-function subscribeToProgress(fileId, callback) {
-  const eventSource = new EventSource(`/api/upload-progress/${fileId}`);
-  eventSource.onmessage = (event) => {
-    try {
-      const progress = JSON.parse(event.data);
-      callback(progress);
-    } catch (e) {
-      console.error('Failed to parse progress:', e);
-    }
-  };
-  eventSource.onerror = () => {
-    eventSource.close();
-  };
-  return eventSource;
-}
-
-function waitForProcessingComplete(fileId, eventSource) {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      eventSource.close();
-      reject(new Error('处理超时'));
-    }, 300000);
-
-    eventSource.onmessage = (event) => {
-      try {
-        const progress = JSON.parse(event.data);
-        if (progress.status === 'completed') {
-          clearTimeout(timeout);
-          eventSource.close();
-          resolve(progress);
-        } else if (progress.status === 'failed') {
-          clearTimeout(timeout);
-          eventSource.close();
-          reject(new Error(progress.error || '处理失败'));
-        }
-      } catch (e) {
-        console.error('Failed to parse progress:', e);
-      }
-    };
-  });
-}
-
 /* ===== Send Message ===== */
+
+function stopCurrentStream() {
+  if (currentAbortController) {
+    currentAbortController.abort();
+    currentAbortController = null;
+  }
+  isLoading = false;
+  updateSendButton();
+}
+
+function cleanupAssistantMessage(contentDiv, sourcesDiv, fullAnswer, sources, userStopped) {
+  const cursor = contentDiv.querySelector('.typing-cursor');
+  if (cursor) cursor.remove();
+  const thinkingIndicator = contentDiv.querySelector('.thinking-indicator');
+  if (thinkingIndicator) thinkingIndicator.remove();
+
+  if (fullAnswer) {
+    contentDiv.innerHTML = marked.parse(fullAnswer);
+    if (sources && sources.length > 0) {
+      renderSources(sourcesDiv, sources);
+    }
+  } else if (userStopped) {
+    contentDiv.innerHTML = '<em style="color: var(--text-muted);">已中断</em>';
+  } else {
+    contentDiv.innerHTML = '<em style="color: var(--text-muted);">连接中断</em>';
+  }
+}
 
 async function sendMessage() {
   const input = document.getElementById('messageInput');
   const question = input.value.trim();
 
-  if (!question || isLoading) return;
+  if (!question) return;
+  if (!currentKbId) { showNotification('请先选择知识库', 'error'); return; }
+  if (!modelLoaded) { showNotification('请先启动模型', 'error'); return; }
 
-  if (!modelLoaded) {
-    showNotification('请先启动模型', 'error');
-    return;
+  // If already loading, abort the current stream
+  if (isLoading && currentAbortController) {
+    currentAbortController.abort();
+    currentAbortController = null;
   }
+
+  const myRequestId = ++chatRequestId;
 
   appendMessage(question, 'user');
   input.value = '';
@@ -415,23 +725,23 @@ async function sendMessage() {
   let fullAnswer = '';
   let sources = null;
 
+  const abortController = new AbortController();
+  currentAbortController = abortController;
+
   try {
-    const response = await fetch('/api/chat/stream', {
+    const response = await fetch(`/api/${currentKbId}/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query: question,
-        sessionId: currentSessionId || undefined,
-      }),
+      body: JSON.stringify({ query: question, sessionId: currentSessionId || undefined }),
+      signal: abortController.signal,
     });
 
-    if (!response.ok) {
-      throw new Error('请求失败');
-    }
+    if (!response.ok) throw new Error('请求失败');
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let sseBuffer = '';
+    let doneReceived = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -448,13 +758,9 @@ async function sendMessage() {
 
             if (data.type === 'thinking') {
               const thinkingText = contentDiv.querySelector('.thinking-text');
-              if (thinkingText && data.message) {
-                thinkingText.textContent = data.message;
-              }
+              if (thinkingText && data.message) thinkingText.textContent = data.message;
             } else if (data.type === 'content') {
-              if (data.sources && !sources) {
-                sources = data.sources;
-              }
+              if (data.sources && !sources) sources = data.sources;
 
               if (data.content && data.content.trim()) {
                 const thinkingIndicator = contentDiv.querySelector('.thinking-indicator');
@@ -465,42 +771,12 @@ async function sendMessage() {
                 scrollToBottom();
               }
             } else if (data.type === 'done') {
+              doneReceived = true;
               const cursor = contentDiv.querySelector('.typing-cursor');
               if (cursor) cursor.remove();
 
               if (sources && sources.length > 0) {
-                const MIN_SCORE = 0.55;
-                const MAX_SOURCES = 4;
-
-                const getDisplayName = (s) => {
-                  if (s.metadata.displayName) return s.metadata.displayName;
-                  const raw = s.metadata.source.split(/[\\/]/).pop();
-                  return raw.replace(/^(\d+-\d+-)+/, '');
-                };
-
-                const grouped = new Map();
-                sources.forEach(s => {
-                  const score = parseFloat(s.score) || 0;
-                  if (score < MIN_SCORE) return;
-                  const name = getDisplayName(s);
-                  const page = s.metadata.page || s.metadata.chunkIndex;
-                  const key = `${name}|p${page}`;
-                  if (!grouped.has(key) || grouped.get(key).score < score) {
-                    grouped.set(key, { fileName: name, page, score });
-                  }
-                });
-
-                const dedupedSources = Array.from(grouped.values())
-                  .sort((a, b) => b.score - a.score)
-                  .slice(0, MAX_SOURCES);
-
-                if (dedupedSources.length > 0) {
-                  sourcesDiv.innerHTML = '<strong>📚 参考来源:</strong><br>' +
-                    dedupedSources.map((s, idx) =>
-                      `${idx + 1}. ${escapeHtml(s.fileName)} (第${s.page}页, 相似度：${s.score.toFixed(3)})`
-                    ).join('<br>');
-                  sourcesDiv.style.display = 'block';
-                }
+                renderSources(sourcesDiv, sources);
               }
 
               if (data.sessionId && data.sessionId !== currentSessionId) {
@@ -511,19 +787,69 @@ async function sendMessage() {
               throw new Error(data.error);
             }
           } catch (e) {
+            if (e.name === 'AbortError') throw e;
             console.error('Parse error:', e);
           }
         }
       }
     }
+
+    // Stream ended without 'done' event — connection was lost or interrupted
+    if (!doneReceived) {
+      const userStopped = (chatRequestId === myRequestId);
+      cleanupAssistantMessage(contentDiv, sourcesDiv, fullAnswer, sources, userStopped);
+    }
   } catch (error) {
-    const thinkingIndicator = contentDiv.querySelector('.thinking-indicator');
-    if (thinkingIndicator) thinkingIndicator.remove();
-    contentDiv.innerHTML = `请求失败：${escapeHtml(error.message)}`;
-    sourcesDiv.style.display = 'none';
+    if (error.name === 'AbortError') {
+      const userStopped = (chatRequestId === myRequestId);
+      cleanupAssistantMessage(contentDiv, sourcesDiv, fullAnswer, sources, userStopped);
+    } else {
+      const thinkingIndicator = contentDiv.querySelector('.thinking-indicator');
+      if (thinkingIndicator) thinkingIndicator.remove();
+      contentDiv.innerHTML = `请求失败：${escapeHtml(error.message)}`;
+      sourcesDiv.style.display = 'none';
+    }
   } finally {
-    isLoading = false;
-    updateSendButton();
+    if (chatRequestId === myRequestId) {
+      isLoading = false;
+      currentAbortController = null;
+      updateSendButton();
+    }
+  }
+}
+
+function renderSources(sourcesDiv, sources) {
+  const MIN_SCORE = 0.55;
+  const MAX_SOURCES = 4;
+
+  const getDisplayName = (s) => {
+    if (s.metadata.displayName) return s.metadata.displayName;
+    const raw = s.metadata.source.split(/[\\/]/).pop();
+    return raw.replace(/^(\d+-\d+-)+/, '');
+  };
+
+  const grouped = new Map();
+  sources.forEach(s => {
+    const score = parseFloat(s.score) || 0;
+    if (score < MIN_SCORE) return;
+    const name = getDisplayName(s);
+    const page = s.metadata.page || s.metadata.chunkIndex;
+    const key = `${name}|p${page}`;
+    if (!grouped.has(key) || grouped.get(key).score < score) {
+      grouped.set(key, { fileName: name, page, score });
+    }
+  });
+
+  const dedupedSources = Array.from(grouped.values())
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MAX_SOURCES);
+
+  if (dedupedSources.length > 0) {
+    sourcesDiv.innerHTML = '<strong>📚 参考来源:</strong><br>' +
+      dedupedSources.map((s, idx) =>
+        `${idx + 1}. ${escapeHtml(s.fileName)} (第${s.page}页, 相似度：${s.score.toFixed(3)})`
+      ).join('<br>');
+    sourcesDiv.style.display = 'block';
   }
 }
 
@@ -532,7 +858,7 @@ async function sendMessage() {
 function handleKeyDown(event) {
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault();
-    sendMessage();
+    handleSendOrStop();
   }
 }
 
@@ -543,7 +869,37 @@ function autoResize(textarea) {
 
 function updateSendButton() {
   const btn = document.getElementById('sendBtn');
-  btn.disabled = isLoading;
+  const sendIcon = btn.querySelector('.send-icon');
+  const stopIcon = btn.querySelector('.stop-icon');
+  if (isLoading) {
+    btn.disabled = false;
+    btn.classList.add('stop-btn');
+    btn.title = '停止生成';
+    if (sendIcon) sendIcon.style.display = 'none';
+    if (stopIcon) stopIcon.style.display = 'block';
+  } else {
+    btn.disabled = false;
+    btn.classList.remove('stop-btn');
+    btn.title = '发送';
+    if (sendIcon) sendIcon.style.display = 'block';
+    if (stopIcon) stopIcon.style.display = 'none';
+  }
+}
+
+function handleSendOrStop() {
+  if (isLoading) {
+    const input = document.getElementById('messageInput');
+    const question = input.value.trim();
+    if (question) {
+      // Has new question - abort and send new
+      sendMessage();
+    } else {
+      // No new question - just stop
+      stopCurrentStream();
+    }
+  } else {
+    sendMessage();
+  }
 }
 
 /* ===== Model Status ===== */
