@@ -23,8 +23,8 @@
   var config = {
     serverUrl: dataset.serverUrl || serverUrl || window.location.origin,
     kbId: dataset.kbId || '',
-    title: dataset.title || '智能客服',
-    welcome: dataset.welcome || '你好！有什么可以帮你的吗？',
+    title: dataset.title || '国际站运营助手',
+    welcome: dataset.welcome || '你好，我是阿里国际站运营知识库助手。你可以向我提问阿里国际站相关问题，我会优先基于已整理的本地知识库进行回答。如果当前知识库暂未覆盖你的问题，我会将该问题记录为待补充内容，并在后续统一整理更新。知识库更新后，你可以再次提问获取更完整的答案。',
     placeholder: dataset.placeholder || '输入你的问题...',
     primaryColor: dataset.primaryColor || '#4f46e5',
     avatar: dataset.avatar || '',
@@ -184,7 +184,7 @@
   var isOpen = false;
   var isDocked = false;
   var isStreaming = false;
-  var messages = loadJ('history', []);
+  var messages = [];
   var currentAbort = null;
   var kbReady = false;
 
@@ -390,7 +390,7 @@
   function fetchWidgetKb() {
     return fetch(config.serverUrl + '/api/widget/kb', { headers: {'Content-Type':'application/json'} })
     .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
-    .then(function(d){ config.kbId=d.kbId; messages=loadJ('history',[]); kbReady=true; })
+    .then(function(d){ config.kbId=d.kbId; messages=[]; kbReady=true; })
     .catch(function(){ showErr('无法连接服务器，请检查服务是否启动'); });
   }
 
@@ -440,7 +440,7 @@
     if (!t || isStreaming) return;
     inputEl.value = ''; inputEl.style.height = 'auto';
     var um = {role:'user',content:t,time:new Date().toISOString()};
-    messages.push(um); appendMsg(um); scrB(); saveJ('history',messages);
+    messages.push(um); appendMsg(um); scrB();
     if (!kbReady) { ensureKbId().then(function(){if(kbReady)doChat(t);}); return; }
     doChat(t);
   }
@@ -510,8 +510,7 @@
   function removeLastUserMsg() {
     // Remove the last user message bubble and the thinking bubble from display
     var last = messages.pop(); // pop the user message we just added
-    if (last && last.role !== 'user') messages.push(last); // put it back if not user
-    saveJ('history', messages);
+    if (last && last.role !== 'user') messages.push(last);
     renderMessages();
   }
 
@@ -525,13 +524,13 @@
     var td=document.getElementById('ragCwThinking');if(td)td.remove();
     if(content){
       var bm={role:'bot',content:content,time:new Date().toISOString(),sources:sources||[]};
-      messages.push(bm);appendMsg(bm);scrB();saveJ('history',messages);
+      messages.push(bm);appendMsg(bm);scrB();
     }
     if(!isOpen){badge.style.display='flex';badge.textContent='1';}
   }
 
   // ===== Events =====
-  clearBtn.addEventListener('click',function(){if(isStreaming)return;messages=[];saveJ('history',[]);localStorage.removeItem(sk('session'));renderMessages();});
+  clearBtn.addEventListener('click',function(){if(isStreaming)return;messages=[];localStorage.removeItem(sk('session'));renderMessages();});
   sendBtn.addEventListener('click',sendMsg);
   inputEl.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();}});
   inputEl.addEventListener('input',function(){this.style.height='auto';this.style.height=Math.min(this.scrollHeight,80)+'px';});
