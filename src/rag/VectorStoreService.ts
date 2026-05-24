@@ -375,13 +375,22 @@ export class VectorStoreService {
    */
   keywordSearch(query: string, topK: number = 5): { doc: StoredDocument; score: number }[] {
     const results: { doc: StoredDocument; score: number }[] = [];
+    const stopWords = new Set([
+      '什么', '是什么', '什么是', '怎么', '怎么样', '为什么', '如何',
+      '吗', '呢', '吧', '啊', '的', '了', '是', '在', '有', '和',
+      '这个', '那个', '哪个', '一个', '什么意', '意思是',
+    ]);
     const keywords: string[] = [];
     const cleanQuery = query.replace(/[\s，。？！、；：''（）\[\]{}]/g, '');
     for (let len = Math.min(4, cleanQuery.length); len >= 2; len--) {
       for (let i = 0; i <= cleanQuery.length - len; i++) {
         const kw = cleanQuery.substring(i, i + len);
-        if (!keywords.includes(kw)) keywords.push(kw);
+        if (!stopWords.has(kw) && !keywords.includes(kw)) keywords.push(kw);
       }
+    }
+    // 如果所有词都是停用词，保留原样（用户可能真在搜这些词）
+    if (keywords.length === 0) {
+      return [];
     }
 
     for (const doc of this.cachedDocs.values()) {

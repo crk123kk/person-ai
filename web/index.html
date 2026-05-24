@@ -267,18 +267,21 @@
     /* Shared section styles */
     .kb-docs-section,
     .kb-websites-section,
+    .unanswered-section,
     .conversation-section {
       padding: 4px 0;
     }
 
     .kb-list-section + .kb-docs-section,
     .kb-docs-section + .kb-websites-section,
-    .kb-websites-section + .conversation-section {
+    .kb-websites-section + .unanswered-section,
+    .unanswered-section + .conversation-section {
       border-top: 1px solid var(--border-color);
     }
 
     .kb-docs-header,
     .kb-websites-header,
+    .unanswered-header,
     .conversation-section-header {
       display: flex;
       align-items: center;
@@ -296,12 +299,14 @@
 
     .kb-docs-header:hover,
     .kb-websites-header:hover,
+    .unanswered-header:hover,
     .conversation-section-header:hover {
       background: var(--hover-bg);
     }
 
     .kb-docs-header svg,
     .kb-websites-header svg,
+    .unanswered-header svg,
     .conversation-section-header svg {
       width: 14px;
       height: 14px;
@@ -310,6 +315,7 @@
 
     .kb-docs-header.collapsed svg,
     .kb-websites-header.collapsed svg,
+    .unanswered-header.collapsed svg,
     .conversation-section-header.collapsed svg {
       transform: rotate(-90deg);
     }
@@ -548,6 +554,63 @@
       padding: 8px 12px 8px 28px;
       font-size: 0.75rem;
       color: var(--text-muted);
+    }
+
+    /* Unanswered questions */
+    .unanswered-list {
+      max-height: 150px;
+      overflow-y: auto;
+    }
+
+    .unanswered-list.collapsed {
+      display: none;
+    }
+
+    .unanswered-item {
+      display: flex;
+      align-items: center;
+      padding: 6px 12px 6px 16px;
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      gap: 6px;
+      cursor: pointer;
+      transition: background 0.15s;
+      user-select: none;
+    }
+
+    .unanswered-item:hover {
+      background: var(--hover-bg);
+    }
+
+    .unanswered-item .unanswered-time {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    .unanswered-item .unanswered-question {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .unanswered-empty {
+      padding: 8px 12px 8px 28px;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .unanswered-view-all {
+      padding: 4px 16px 8px;
+      font-size: 0.72rem;
+      color: var(--accent-color);
+      cursor: pointer;
+      text-align: center;
+      transition: opacity 0.15s;
+    }
+
+    .unanswered-view-all:hover {
+      opacity: 0.7;
     }
 
     .kb-docs-empty {
@@ -1458,6 +1521,19 @@
             </svg>
             添加网站
           </button>
+        </div>
+      </div>
+
+      <div class="unanswered-section" id="unansweredSection">
+        <div class="unanswered-header" id="unansweredHeader">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" onclick="toggleUnansweredPanel()">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+          <span style="flex:1;" onclick="toggleUnansweredPanel()">未匹配问题</span>
+          <span id="unansweredCount" style="font-weight:400;" onclick="toggleUnansweredPanel()">0</span>
+        </div>
+        <div class="unanswered-list" id="unansweredList">
+          <div class="unanswered-empty">暂无未匹配问题</div>
         </div>
       </div>
 

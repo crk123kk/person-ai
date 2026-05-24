@@ -602,6 +602,43 @@ export async function startServer(port: number): Promise<number> {
     }
   });
 
+  // 未匹配问题记录
+  app.get('/api/:kbId/unanswered', (req, res) => {
+    try {
+      const logPath = path.resolve(config.dataDir, 'unanswered', `${req.params.kbId}.md`);
+      if (!fs.existsSync(logPath)) {
+        return res.json({ questions: [] });
+      }
+      const raw = fs.readFileSync(logPath, 'utf-8');
+      const lines = raw.split('\n');
+      const questions: { time: string; question: string }[] = [];
+      for (const line of lines) {
+        const match = line.match(/^\|\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s*\|\s*(.+?)\s*\|$/);
+        if (match) {
+          questions.push({ time: match[1], question: match[2] });
+        }
+      }
+      res.json({ questions });
+    } catch (error) {
+      logger.error('Failed to read unanswered questions:', error);
+      res.status(500).json({ error: '读取未匹配问题失败' });
+    }
+  });
+
+  // 未匹配问题原始 markdown
+  app.get('/api/:kbId/unanswered/raw', (req, res) => {
+    try {
+      const logPath = path.resolve(config.dataDir, 'unanswered', `${req.params.kbId}.md`);
+      if (!fs.existsSync(logPath)) {
+        return res.send('<p>暂无未匹配问题记录</p>');
+      }
+      res.sendFile(logPath);
+    } catch (error) {
+      logger.error('Failed to read raw unanswered questions:', error);
+      res.status(500).json({ error: '读取未匹配问题失败' });
+    }
+  });
+
   // ===== OpenAI 兼容 API =====
 
   app.get('/v1/models', (_req, res) => {
@@ -701,8 +738,9 @@ export async function startServer(port: number): Promise<number> {
 
   app.get('/chat-widget.js', (_req, res) => {
     const filePath = path.join(webPath, 'chat-widget.js');
-    res.setHeader('Content-Type', 'application/javascript');
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
     res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.sendFile(filePath);
   });
 

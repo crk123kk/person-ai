@@ -473,7 +473,7 @@
                 if(thEl&&thEl.parentNode){thEl.remove();thEl=null;}
                 if(d.content){bot+=d.content;if(stEl)stEl.innerHTML=renderMD(bot);scrB();}
                 if(d.sessionId)saveS('session',d.sessionId);
-                if(d.sources&&d.sources.length){sources=d.sources;}
+                if(d.sources){sources=d.sources;}
               }else if(d.type==='done'){if(d.sessionId)saveS('session',d.sessionId);fin(bot,sources);return;}
               else if(d.type==='error'){fin(bot||('出错了：'+(d.error||'未知错误')),[]);return;}
             }catch{}

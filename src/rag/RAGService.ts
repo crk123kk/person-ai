@@ -63,8 +63,10 @@ export class RAGService {
   private contextManager: ContextManager;
   private chatHistory: ChatHistoryManager;
   private circuitBreaker: CircuitBreaker;
+  private kbId: string;
 
   constructor(kbId?: string) {
+    this.kbId = kbId || 'default';
     logger.info(`Initializing RAG service${kbId ? ` for KB: ${kbId}` : ''}...`);
 
     this.embeddingService = EmbeddingService.getInstance();
@@ -575,6 +577,11 @@ export class RAGService {
       yield { type: 'token', token: chunk.content };
     }
 
+    // LLM 判断无法回答时，清空参考来源
+    if (fullAnswer.includes('未找到相关内容')) {
+      yield { type: 'sources', sources: [] };
+    }
+
     // 保存助手消息
     this.chatHistory.addAssistantMessage(
       session.id,
@@ -824,11 +831,11 @@ ${context}
    */
   private logUnansweredQuestion(question: string): void {
     try {
-      const logPath = path.resolve(config.dataDir, 'unanswered-questions.md');
-      const dir = path.dirname(logPath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+      const logDir = path.resolve(config.dataDir, 'unanswered');
+      if (!fs.existsSync(logDir)) {
+        fs.mkdirSync(logDir, { recursive: true });
       }
+      const logPath = path.join(logDir, `${this.kbId}.md`);
       const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
       const entry = `| ${timestamp} | ${question} |\n`;
       if (!fs.existsSync(logPath)) {

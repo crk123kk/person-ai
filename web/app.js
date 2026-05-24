@@ -130,6 +130,7 @@ async function loadKnowledgeBases() {
       loadSessions();
       loadDocs();
       loadWebsites();
+      loadUnanswered();
     }
   } catch (error) {
     console.error('Failed to load knowledge bases:', error);
@@ -202,6 +203,7 @@ async function selectKb(kbId) {
   loadSessions();
   loadDocs();
   loadWebsites();
+  loadUnanswered();
 }
 
 async function createKb() {
@@ -350,6 +352,57 @@ async function deleteWebsite(url) {
   } catch (error) {
     showNotification(`删除失败：${error.message}`, 'error');
   }
+}
+
+/* ===== Unanswered Questions Panel ===== */
+
+function toggleUnansweredPanel() {
+  const header = document.getElementById('unansweredHeader');
+  const list = document.getElementById('unansweredList');
+  header.classList.toggle('collapsed');
+  list.classList.toggle('collapsed');
+}
+
+async function loadUnanswered() {
+  if (!currentKbId) {
+    document.getElementById('unansweredCount').textContent = '0';
+    document.getElementById('unansweredList').innerHTML = '<div class="unanswered-empty">暂无未匹配问题</div>';
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/${currentKbId}/unanswered`);
+    const data = await response.json();
+    const questions = data.questions || [];
+
+    document.getElementById('unansweredCount').textContent = questions.length;
+
+    if (questions.length === 0) {
+      document.getElementById('unansweredList').innerHTML = '<div class="unanswered-empty">暂无未匹配问题</div>';
+      return;
+    }
+
+    const recent = questions.slice(-10).reverse();
+    let html = '';
+    for (const q of recent) {
+      html += `
+        <div class="unanswered-item" onclick="openUnansweredDetail()" title="${escapeHtml(q.question)}">
+          <span class="unanswered-time">${q.time.slice(5, 16)}</span>
+          <span class="unanswered-question">${escapeHtml(q.question)}</span>
+        </div>`;
+    }
+    if (questions.length > 10) {
+      html += `<div class="unanswered-view-all" onclick="openUnansweredDetail()">查看全部 ${questions.length} 条记录 →</div>`;
+    }
+    document.getElementById('unansweredList').innerHTML = html;
+  } catch (error) {
+    console.error('Failed to load unanswered questions:', error);
+  }
+}
+
+function openUnansweredDetail() {
+  if (!currentKbId) return;
+  window.open(`/unanswered.html?kb=${encodeURIComponent(currentKbId)}`, '_blank');
 }
 
 /* ===== KB Documents Panel ===== */
@@ -1010,7 +1063,7 @@ async function sendMessage() {
               const thinkingText = contentDiv.querySelector('.thinking-text');
               if (thinkingText && data.message) thinkingText.textContent = data.message;
             } else if (data.type === 'content') {
-              if (data.sources && !sources) sources = data.sources;
+              if (data.sources !== undefined) sources = data.sources;
 
               if (data.content && data.content.trim()) {
                 const thinkingIndicator = contentDiv.querySelector('.thinking-indicator');

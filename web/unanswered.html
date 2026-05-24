@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>未匹配问题记录</title>
+  <style>
+    :root {
+      --bg: #fff;
+      --text: #1f2937;
+      --text-secondary: #6b7280;
+      --border: #e5e7eb;
+      --accent: #4f46e5;
+      --hover-bg: #f3f4f6;
+      --code-bg: #f3f4f6;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1a1a1a;
+        --text: #e5e5e5;
+        --text-secondary: #9ca3af;
+        --border: #333;
+        --hover-bg: #252525;
+        --code-bg: #252525;
+      }
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 32px 24px;
+      line-height: 1.6;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 8px; }
+    .subtitle { color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 24px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+    th, td {
+      padding: 10px 14px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    th { font-weight: 600; color: var(--text-secondary); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; }
+    tr:hover { background: var(--hover-bg); }
+    td:first-child { white-space: nowrap; color: var(--text-secondary); font-size: 0.82rem; width: 140px; }
+    .empty { text-align: center; color: var(--text-secondary); padding: 60px 0; }
+    .empty svg { width: 48px; height: 48px; opacity: 0.3; margin-bottom: 12px; }
+    .back { display: inline-block; margin-bottom: 20px; color: var(--accent); text-decoration: none; font-size: 0.85rem; cursor: pointer; }
+    .back:hover { text-decoration: underline; }
+    pre { background: var(--code-bg); padding: 12px 16px; border-radius: 6px; overflow-x: auto; font-size: 0.82rem; }
+    code { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.82rem; }
+    .kb-name { color: var(--accent); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <a class="back" href="javascript:history.back()">&larr; 返回</a>
+  <h1>未匹配问题记录</h1>
+  <p class="subtitle">知识库：<span class="kb-name" id="kbName">-</span> &nbsp;|&nbsp; 以下问题未在知识库中找到相关内容</p>
+  <div id="content"></div>
+
+  <script>
+    (function() {
+      var kbId = new URLSearchParams(location.search).get('kb') || '';
+      if (!kbId) {
+        document.getElementById('content').innerHTML = '<div class="empty">未指定知识库</div>';
+        return;
+      }
+
+      var kbNameEl = document.getElementById('kbName');
+      var contentEl = document.getElementById('content');
+
+      fetch('/api/kb')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          var kbs = data.knowledgeBases || [];
+          for (var i = 0; i < kbs.length; i++) {
+            if (kbs[i].id === kbId) {
+              kbNameEl.textContent = kbs[i].name;
+              break;
+            }
+          }
+        })
+        .catch(function() {});
+
+      fetch('/api/' + encodeURIComponent(kbId) + '/unanswered')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          var questions = data.questions || [];
+          document.title = '未匹配问题记录 - ' + kbId;
+
+          if (questions.length === 0) {
+            contentEl.innerHTML = '<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M9 12h6"/></svg><p>暂无未匹配问题记录</p></div>';
+            return;
+          }
+
+          var html = '<table><thead><tr><th>时间</th><th>问题</th></tr></thead><tbody>';
+          for (var i = questions.length - 1; i >= 0; i--) {
+            var q = questions[i];
+            html += '<tr><td>' + esc(q.time) + '</td><td>' + esc(q.question) + '</td></tr>';
+          }
+          html += '</tbody></table>';
+          contentEl.innerHTML = html;
+        })
+        .catch(function(err) {
+          contentEl.innerHTML = '<div class="empty"><p>加载失败：' + esc(err.message) + '</p></div>';
+        });
+
+      function esc(s) {
+        var d = document.createElement('div');
+        d.appendChild(document.createTextNode(s));
+        return d.innerHTML;
+      }
+    })();
+  </script>
+</body>
+</html>
