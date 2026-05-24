@@ -14,6 +14,87 @@ import { v4 as uuidv4 } from 'uuid';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// ===== Website storage helpers =====
+
+interface WebsitePage {
+  url: string;
+  title: string;
+  chunks: number;
+}
+
+interface WebsiteRecord {
+  url: string;
+  chunks: number;
+  addedAt: string;
+  status: 'completed' | 'failed';
+  pages: WebsitePage[];
+}
+
+function getWebsitesPath(kbId: string): string {
+  const kbBase = path.resolve(config.dataDir, 'knowledge-bases', kbId);
+  return path.join(kbBase, 'websites.json');
+}
+
+function listWebsites(kbId: string): WebsiteRecord[] {
+  const p = getWebsitesPath(kbId);
+  if (!fs.existsSync(p)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf-8'));
+  } catch {
+    return [];
+  }
+}
+
+/** Extract domain from URL for grouping */
+function getSiteRoot(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.hostname}`;
+  } catch {
+    return url;
+  }
+}
+
+/** Check if a page URL belongs to a site */
+function isPageOfSite(pageUrl: string, siteUrl: string): boolean {
+  try {
+    const pageHost = new URL(pageUrl).hostname;
+    const siteHost = new URL(siteUrl).hostname;
+    return pageHost === siteHost;
+  } catch {
+    return false;
+  }
+}
+
+function saveWebsite(kbId: string, url: string, chunks: number, pages?: WebsitePage[]): void {
+  const websites = listWebsites(kbId);
+  const existing = websites.findIndex((w: WebsiteRecord) => w.url === url);
+  const record: WebsiteRecord = {
+    url,
+    chunks,
+    addedAt: new Date().toISOString(),
+    status: 'completed',
+    pages: pages || [],
+  };
+  if (existing >= 0) {
+    websites[existing] = record;
+  } else {
+    websites.push(record);
+  }
+  fs.writeFileSync(getWebsitesPath(kbId), JSON.stringify(websites, null, 2), 'utf-8');
+}
+
+function removeWebsite(kbId: string, url: string): boolean {
+  const websites = listWebsites(kbId);
+  const idx = websites.findIndex((w: WebsiteRecord) => w.url === url);
+  if (idx < 0) return false;
+  websites.splice(idx, 1);
+  fs.writeFileSync(getWebsitesPath(kbId), JSON.stringify(websites, null, 2), 'utf-8');
+  return true;
+}
+
+// ===== End website storage helpers =====
+
 /**
  * 启动 Web 服务器
  */
@@ -89,6 +170,19 @@ export async function startServer(port: number): Promise<number> {
     res.json(kb);
   });
 
+  // 智能客服专用：确保插件知识库存在（不存在则自动创建）
+  const WIDGET_KB_NAME = '阿里国际站';
+  app.get('/api/widget/kb', (_req, res) => {
+    const list = kbManager.list();
+    // 查找名为「智能客服」的知识库
+    let kb = list.find(k => k.name === WIDGET_KB_NAME);
+    if (!kb) {
+      kb = kbManager.create(WIDGET_KB_NAME);
+      logger.info(`[Widget] Auto-created knowledge base: ${kb.id}`);
+    }
+    res.json({ kbId: kb.id, kbName: kb.name });
+  });
+
   app.delete('/api/kb/:kbId', (req, res) => {
     const { kbId } = req.params;
     // 从内存中移除 RAG 实例
@@ -138,7 +232,7 @@ export async function startServer(port: number): Promise<number> {
     const { fileId } = req.params;
     const progressManager = ProgressManager.getInstance();
 
-    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
@@ -218,11 +312,153 @@ export async function startServer(port: number): Promise<number> {
     }
   });
 
-  // 列出文档
+  // 添加单个网页
+  app.post('/api/:kbId/crawl-page', async (req, res) => {
+    try {
+      const { url } = req.body;
+      if (!url) return res.status(400).json({ error: '缺少 url 参数' });
+
+      let normalizedUrl: string;
+      try {
+        const u = new URL(url);
+        normalizedUrl = u.href;
+      } catch {
+        return res.status(400).json({ error: 'URL 格式不正确' });
+      }
+
+      const kbId = req.params.kbId;
+      const rag = getRagService(kbId);
+      const fileId = uuidv4();
+      const progressManager = ProgressManager.getInstance();
+
+      progressManager.createProgress(fileId, normalizedUrl);
+      progressManager.updateStage(fileId, 'upload', { progress: 100, status: 'completed' });
+
+      logger.info(`[${kbId}] Adding single page: ${normalizedUrl}`);
+      res.json({ success: true, fileId });
+
+      rag.addWebDocuments(normalizedUrl, fileId, { maxPages: 1, requestDelay: 0 })
+        .then((results) => {
+          const totalChunks = results.reduce((sum, r) => sum + r.totalChunks, 0);
+          progressManager.updateStatus(fileId, 'completed');
+          logger.info(`[${kbId}] Single page added: ${totalChunks} chunks`);
+
+          // 保存为网页类型的网站记录
+          const pages: WebsitePage[] = results.map(r => ({
+            url: r.documentId,
+            title: r.documentId,
+            chunks: r.totalChunks,
+          }));
+          saveWebsite(kbId, normalizedUrl, totalChunks, pages);
+        })
+        .catch((error) => {
+          logger.error('Single page add failed:', error);
+          progressManager.updateStatus(fileId, 'failed', error instanceof Error ? error.message : 'Unknown error');
+        });
+    } catch (error) {
+      logger.error('Crawl-page request failed:', error);
+      res.status(500).json({ error: '添加网页失败' });
+    }
+  });
+
+  // 爬取网站
+  app.post('/api/:kbId/crawl', async (req, res) => {
+    try {
+      const { url, maxPages, requestDelay } = req.body;
+      if (!url) return res.status(400).json({ error: '缺少 url 参数' });
+
+      // 验证 URL 格式
+      let normalizedUrl: string;
+      try {
+        const u = new URL(url);
+        normalizedUrl = u.href.replace(/\/+$/, '');
+      } catch {
+        return res.status(400).json({ error: 'URL 格式不正确' });
+      }
+
+      const kbId = req.params.kbId;
+      const rag = getRagService(kbId);
+      const fileId = uuidv4();
+      const progressManager = ProgressManager.getInstance();
+
+      progressManager.createProgress(fileId, normalizedUrl);
+      progressManager.updateStage(fileId, 'upload', { progress: 100, status: 'completed' });
+
+      logger.info(`[${kbId}] Crawling website: ${normalizedUrl}`);
+
+      // 先返回 fileId，让前端立即订阅 SSE 进度
+      res.json({ success: true, fileId });
+
+      // 后台处理
+      rag.addWebDocuments(normalizedUrl, fileId, { maxPages: maxPages || 200, requestDelay: requestDelay || 1500 })
+        .then((results) => {
+          const totalChunks = results.reduce((sum, r) => sum + r.totalChunks, 0);
+          progressManager.updateStatus(fileId, 'completed');
+          logger.info(`[${kbId}] Website crawled: ${results.length} pages, ${totalChunks} chunks`);
+
+          // 构建页面列表
+          const pages: WebsitePage[] = results.map(r => ({
+            url: r.documentId,
+            title: r.documentId,
+            chunks: r.totalChunks,
+          }));
+
+          // 保存网站信息到 websites.json
+          saveWebsite(kbId, normalizedUrl, totalChunks, pages);
+        })
+        .catch((error) => {
+          logger.error('Website crawling failed:', error);
+          progressManager.updateStatus(fileId, 'failed', error instanceof Error ? error.message : 'Unknown error');
+        });
+    } catch (error) {
+      logger.error('Crawl request failed:', error);
+      res.status(500).json({ error: '爬取失败' });
+    }
+  });
+
+  // 列出知识库网站（包含每个网站下的页面详情）
+  app.get('/api/:kbId/websites', async (_req, res) => {
+    const kbId = _req.params.kbId;
+    const websites = listWebsites(kbId);
+
+    // 从向量库中补充页面的 displayName
+    try {
+      const rag = getRagService(kbId);
+      const allDocs = await rag.listDocuments();
+
+      for (const site of websites) {
+        if (!site.pages || site.pages.length === 0) continue;
+        for (const page of site.pages) {
+          const doc = allDocs.find(d => d.source === page.url);
+          if (doc && doc.displayName) {
+            page.title = doc.displayName;
+          }
+        }
+      }
+    } catch {
+      // 如果获取失败，保持原始数据
+    }
+
+    res.json({ websites });
+  });
+
+  // 删除知识库网站（仅删除记录，不删除已入库的向量）
+  app.delete('/api/:kbId/websites', (req, res) => {
+    const kbId = req.params.kbId;
+    const url = req.query.url as string;
+    if (!url) return res.status(400).json({ error: '缺少 url 参数' });
+    const removed = removeWebsite(kbId, url);
+    if (!removed) return res.status(404).json({ error: '网站不存在' });
+    res.json({ success: true });
+  });
+
+  // 列出文档（排除网页来源，网页在「知识库网站」中展示）
   app.get('/api/:kbId/documents', async (req, res) => {
     try {
       const rag = getRagService(req.params.kbId);
-      res.json({ documents: await rag.listDocuments() });
+      const docs = await rag.listDocuments();
+      const filtered = docs.filter(d => !d.source.startsWith('http://') && !d.source.startsWith('https://'));
+      res.json({ documents: filtered });
     } catch (error) {
       res.status(500).json({ error: '获取文档列表失败' });
     }
@@ -250,7 +486,7 @@ export async function startServer(port: number): Promise<number> {
       const kbId = req.params.kbId;
       const rag = getRagService(kbId);
 
-      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
       res.setHeader('X-Accel-Buffering', 'no');
@@ -399,7 +635,7 @@ export async function startServer(port: number): Promise<number> {
       logger.info(`OpenAI API [${effectiveKbId}]: ${query} (stream=${!!stream})`);
 
       if (stream) {
-        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
         res.setHeader('X-Accel-Buffering', 'no');
@@ -461,10 +697,30 @@ export async function startServer(port: number): Promise<number> {
     }
   });
 
+  // ===== 智能客服插件（允许跨域引用）=====
+
+  app.get('/chat-widget.js', (_req, res) => {
+    const filePath = path.join(webPath, 'chat-widget.js');
+    res.setHeader('Content-Type', 'application/javascript');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.sendFile(filePath);
+  });
+
+  app.get('/chat-widget-demo', (_req, res) => {
+    const filePath = path.join(webPath, 'chat-widget-demo.html');
+    res.sendFile(filePath);
+  });
+
   // ===== 静态文件 =====
 
   const webPath = path.join(__dirname, '../web');
-  app.use(express.static(webPath));
+  app.use(express.static(webPath, {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.js') || filePath.endsWith('.html') || filePath.endsWith('.css')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      }
+    }
+  }));
 
   app.get('*', (_req, res) => {
     const indexPath = path.join(webPath, 'index.html');

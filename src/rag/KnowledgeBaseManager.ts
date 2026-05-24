@@ -28,10 +28,13 @@ export class KnowledgeBaseManager {
       const metaPath = path.join(this.baseDir, dir, 'meta.json');
       if (fs.existsSync(metaPath)) {
         try {
-          const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+          let raw = fs.readFileSync(metaPath, 'utf-8');
+          // Strip BOM if present
+          if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1);
+          const meta = JSON.parse(raw);
           result.push(meta);
-        } catch {
-          // skip corrupted meta
+        } catch (err) {
+          logger.warn(`Skipping corrupted meta.json in ${dir}:`, err);
         }
       }
     }
@@ -54,9 +57,11 @@ export class KnowledgeBaseManager {
 
   /** Create a new knowledge base */
   create(name: string): KnowledgeBase {
-    // Generate id from name: lowercase, replace spaces with hyphens, add suffix for uniqueness
-    let id = name.toLowerCase().replace(/[^a-z0-9一-鿿]+/g, '-').replace(/^-|-$/g, '');
-    if (!id) id = 'kb';
+    // Generate a URL-safe id from name
+    let id = name.toLowerCase();
+    // Replace non-ASCII characters with nothing, then slugify
+    id = id.replace(/[^\x00-\x7F]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    if (!id) id = 'kb-' + Date.now().toString(36);
     let finalId = id;
     let counter = 1;
     while (fs.existsSync(path.join(this.baseDir, finalId))) {

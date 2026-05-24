@@ -136,6 +136,44 @@ export class DataCleaner {
   }
 
   /**
+   * HTML/网页内容清洗
+   * 清理从网页提取的文本中常见的噪声
+   */
+  static cleanHTML(text: string): string {
+    let cleaned = text;
+
+    // 1. 移除 HTML 实体
+    cleaned = cleaned.replace(/&nbsp;/gi, ' ');
+    cleaned = cleaned.replace(/&amp;/gi, '&');
+    cleaned = cleaned.replace(/&lt;/gi, '<');
+    cleaned = cleaned.replace(/&gt;/gi, '>');
+    cleaned = cleaned.replace(/&quot;/gi, '"');
+    cleaned = cleaned.replace(/&#\d+;/g, '');
+
+    // 2. 移除残留 HTML 标签
+    cleaned = cleaned.replace(/<[^>]+>/g, '');
+
+    // 3. 移除 URL 中的跟踪参数等噪声
+    cleaned = cleaned.replace(/utm_[a-z]+=[^&\s]+/gi, '');
+
+    // 4. 移除社交媒体分享按钮相关文本
+    cleaned = cleaned.replace(/(分享到|Share on|Tweet|Pin it|LinkedIn)[^\n]*/gi, '');
+
+    // 5. 移除 Cookie/GDPR 通知相关文本
+    cleaned = cleaned.replace(/(We use cookies|本站使用 Cookie|Accept cookies?)[^\n]*/gi, '');
+
+    // 6. 统一换行符
+    cleaned = cleaned.replace(/\r\n/g, '\n');
+    cleaned = cleaned.replace(/\r/g, '\n');
+
+    // 7. 移除多余空白
+    cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+    cleaned = cleaned.replace(/[ \t]+$/gm, '');
+
+    return cleaned.trim();
+  }
+
+  /**
    * Markdown 清洗（保留结构）
    */
   static cleanMarkdown(content: string): string {

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>智能客服插件 - 演示页</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+    }
+    .demo-container {
+      text-align: center;
+      max-width: 600px;
+      padding: 40px;
+    }
+    h1 { font-size: 36px; margin-bottom: 16px; }
+    p { font-size: 18px; opacity: 0.85; line-height: 1.6; margin-bottom: 24px; }
+    .hint {
+      background: rgba(255,255,255,0.15);
+      backdrop-filter: blur(8px);
+      border-radius: 12px;
+      padding: 20px;
+      font-size: 14px;
+      text-align: left;
+    }
+    .hint code {
+      background: rgba(0,0,0,0.2);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div class="demo-container">
+    <h1>RAG 智能客服</h1>
+    <p>点击右下角气泡开始对话</p>
+    <div class="hint">
+      <strong>嵌入到你的网站只需一行代码：</strong><br><br>
+      <code>&lt;script src="https://rag.chenkk.shop/chat-widget.js"&gt;&lt;/script&gt;</code>
+      <br><br>
+      <strong>可选参数：</strong><br>
+      <code>data-kb-id</code> — 知识库 ID<br>
+      <code>data-title</code> — 客服标题<br>
+      <code>data-welcome</code> — 欢迎语<br>
+      <code>data-primary-color</code> — 主题色<br>
+      <code>data-placeholder</code> — 输入框提示<br>
+      <code>data-position</code> — 位置 left/right
+    </div>
+  </div>
+
+  <!-- 嵌入智能客服插件 -->
+  <script src="chat-widget.js?v=5" data-title="RAG 智能客服" data-welcome="你好！我是智能客服，有什么可以帮你的吗？"></script>
+</body>
+</html>

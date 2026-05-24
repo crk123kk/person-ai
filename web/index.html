@@ -71,6 +71,29 @@
       overflow: hidden;
     }
 
+    /* ===== Scrollbar ===== */
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--scrollbar-thumb);
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--text-muted);
+    }
+
+    ::-webkit-scrollbar-corner {
+      background: transparent;
+    }
+
     /* ===== Layout ===== */
     .app {
       display: flex;
@@ -243,16 +266,19 @@
 
     /* Shared section styles */
     .kb-docs-section,
+    .kb-websites-section,
     .conversation-section {
       padding: 4px 0;
     }
 
     .kb-list-section + .kb-docs-section,
-    .kb-docs-section + .conversation-section {
+    .kb-docs-section + .kb-websites-section,
+    .kb-websites-section + .conversation-section {
       border-top: 1px solid var(--border-color);
     }
 
     .kb-docs-header,
+    .kb-websites-header,
     .conversation-section-header {
       display: flex;
       align-items: center;
@@ -269,11 +295,13 @@
     }
 
     .kb-docs-header:hover,
+    .kb-websites-header:hover,
     .conversation-section-header:hover {
       background: var(--hover-bg);
     }
 
     .kb-docs-header svg,
+    .kb-websites-header svg,
     .conversation-section-header svg {
       width: 14px;
       height: 14px;
@@ -281,6 +309,7 @@
     }
 
     .kb-docs-header.collapsed svg,
+    .kb-websites-header.collapsed svg,
     .conversation-section-header.collapsed svg {
       transform: rotate(-90deg);
     }
@@ -389,6 +418,138 @@
       border-color: var(--accent);
     }
 
+    .kb-websites-section {
+      padding: 4px 0;
+    }
+
+    .kb-websites-list {
+      max-height: 180px;
+      overflow-y: auto;
+    }
+
+    .kb-websites-list.collapsed {
+      display: none;
+    }
+
+    .kb-website-item {
+      display: flex;
+      align-items: center;
+      padding: 6px 12px 6px 16px;
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      gap: 6px;
+      cursor: pointer;
+      transition: background 0.15s;
+      user-select: none;
+    }
+
+    .kb-website-item:hover {
+      background: var(--hover-bg);
+    }
+
+    .kb-website-item .website-expand-arrow {
+      flex-shrink: 0;
+      transition: transform 0.2s;
+      color: var(--text-muted);
+    }
+
+    .kb-website-item .website-expand-arrow.expanded {
+      transform: rotate(90deg);
+    }
+
+    .kb-website-item .website-url {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .kb-website-item .website-chunks {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    .kb-website-item .website-delete-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border: none;
+      background: none;
+      border-radius: 4px;
+      cursor: pointer;
+      color: var(--text-muted);
+      flex-shrink: 0;
+      visibility: hidden;
+      opacity: 0;
+      transition: visibility 0.1s, opacity 0.1s;
+    }
+
+    .kb-website-item:hover .website-delete-btn {
+      visibility: visible;
+      opacity: 1;
+    }
+
+    .kb-website-item .website-delete-btn:hover {
+      color: var(--danger);
+      background: rgba(239, 65, 70, 0.1);
+    }
+
+    .website-pages {
+      max-height: 300px;
+      overflow-y: auto;
+      transition: max-height 0.2s ease;
+    }
+
+    .website-pages.collapsed {
+      max-height: 0;
+      overflow: hidden;
+    }
+
+    .website-page-item {
+      display: flex;
+      align-items: center;
+      padding: 4px 12px 4px 36px;
+      font-size: 0.73rem;
+      color: var(--text-muted);
+      gap: 6px;
+      transition: background 0.15s;
+    }
+
+    .website-page-item:hover {
+      background: var(--hover-bg);
+      color: var(--text-secondary);
+    }
+
+    .website-page-item .page-title {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .website-page-item .page-chunks {
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      flex-shrink: 0;
+      opacity: 0.7;
+    }
+
+    .website-page-empty {
+      padding: 4px 12px 4px 36px;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      font-style: italic;
+    }
+
+    .kb-websites-empty {
+      padding: 8px 12px 8px 28px;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
     .kb-docs-empty {
       padding: 8px 12px 8px 28px;
       font-size: 0.75rem;
@@ -410,15 +571,6 @@
 
     .conversation-list.collapsed {
       display: none;
-    }
-
-    .conversation-list::-webkit-scrollbar {
-      width: 4px;
-    }
-
-    .conversation-list::-webkit-scrollbar-thumb {
-      background: var(--scrollbar-thumb);
-      border-radius: 4px;
     }
 
     .conversation-group-label {
@@ -620,15 +772,6 @@
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-    }
-
-    .chat-area::-webkit-scrollbar {
-      width: 6px;
-    }
-
-    .chat-area::-webkit-scrollbar-thumb {
-      background: var(--scrollbar-thumb);
-      border-radius: 4px;
     }
 
     /* Welcome screen */
@@ -1020,6 +1163,153 @@
       background: rgba(239, 65, 70, 0.1);
     }
 
+    /* ===== Crawl URL Modal ===== */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: fadeIn 0.15s ease;
+    }
+
+    .modal-overlay.hidden {
+      display: none;
+    }
+
+    .modal {
+      background: var(--main-bg);
+      border-radius: 16px;
+      padding: 24px;
+      width: 90%;
+      max-width: 480px;
+      box-shadow: 0 20px 60px var(--shadow);
+      animation: modalSlide 0.2s ease;
+    }
+
+    .modal h3 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 16px;
+      color: var(--text-primary);
+    }
+
+    .modal-input {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid var(--input-border);
+      border-radius: 10px;
+      background: var(--input-bg);
+      color: var(--text-primary);
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s;
+      font-family: inherit;
+    }
+
+    .modal-input:focus {
+      border-color: var(--accent);
+    }
+
+    .modal-input::placeholder {
+      color: var(--text-muted);
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+      justify-content: flex-end;
+    }
+
+    .modal-btn {
+      padding: 8px 20px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 500;
+      transition: background 0.15s;
+    }
+
+    .modal-btn-cancel {
+      background: var(--hover-bg);
+      color: var(--text-secondary);
+    }
+
+    .modal-btn-cancel:hover {
+      background: var(--active-bg);
+    }
+
+    .modal-btn-primary {
+      background: var(--accent);
+      color: white;
+    }
+
+    .modal-btn-primary:hover {
+      background: var(--accent-hover);
+    }
+
+    .modal-btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .crawl-mode-selector {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .crawl-mode-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border: 1px solid var(--input-border);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .crawl-mode-option:hover {
+      border-color: var(--accent);
+    }
+
+    .crawl-mode-option:has(input:checked) {
+      border-color: var(--accent);
+      background: rgba(16, 163, 127, 0.06);
+    }
+
+    .crawl-mode-option input[type="radio"] {
+      accent-color: var(--accent);
+      flex-shrink: 0;
+    }
+
+    .crawl-mode-option span:first-of-type {
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    .crawl-mode-desc {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    @keyframes modalSlide {
+      from { transform: translateY(-20px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
     /* ===== Notification ===== */
     .notification {
       position: fixed;
@@ -1119,6 +1409,13 @@
               <line x1="5" y1="12" x2="19" y2="12"></line>
             </svg>
           </button>
+          <button class="section-add-icon-btn" onclick="event.stopPropagation(); openCrawlModal()" title="添加网站">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="2" y1="12" x2="22" y2="12"></line>
+              <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"></path>
+            </svg>
+          </button>
         </div>
         <div class="kb-docs-list" id="kbDocsList">
           <div class="kb-docs-empty">暂无文档</div>
@@ -1130,6 +1427,36 @@
               <line x1="5" y1="12" x2="19" y2="12"></line>
             </svg>
             添加文档
+          </button>
+        </div>
+      </div>
+
+      <div class="kb-websites-section" id="kbWebsitesSection">
+        <div class="kb-websites-header" id="kbWebsitesHeader">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" onclick="toggleWebsitesPanel()">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+          <span style="flex:1;" onclick="toggleWebsitesPanel()">知识库网站</span>
+          <span id="kbWebsitesCount" style="font-weight:400;" onclick="toggleWebsitesPanel()">0</span>
+          <button class="section-add-icon-btn" onclick="event.stopPropagation(); openCrawlModal()" title="添加网站">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="2" y1="12" x2="22" y2="12"></line>
+              <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="kb-websites-list" id="kbWebsitesList">
+          <div class="kb-websites-empty">暂无网站</div>
+        </div>
+        <div class="section-add-area">
+          <button class="section-add-btn" onclick="openCrawlModal()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="2" y1="12" x2="22" y2="12"></line>
+              <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"></path>
+            </svg>
+            添加网站
           </button>
         </div>
       </div>
@@ -1225,6 +1552,13 @@
             </svg>
             <input type="file" id="fileInput" accept=".pdf,.md,.markdown,.txt,.text,.docx,.py,.js,.ts,.java,.go,.rs" onchange="handleFileSelect(event)">
           </button>
+          <button class="upload-btn" onclick="openCrawlModal()" title="添加网站">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="2" y1="12" x2="22" y2="12"></line>
+              <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"></path>
+            </svg>
+          </button>
           <textarea
             id="messageInput"
             rows="1"
@@ -1245,6 +1579,30 @@
     </main>
   </div>
 
-  <script src="app.js"></script>
+  <!-- Crawl URL Modal -->
+  <div class="modal-overlay hidden" id="crawlModal">
+    <div class="modal">
+      <h3 id="crawlModalTitle">添加网站到知识库</h3>
+      <input type="url" class="modal-input" id="crawlUrlInput" placeholder="输入网站地址，如 https://example.com" autocomplete="url">
+      <div class="crawl-mode-selector">
+        <label class="crawl-mode-option">
+          <input type="radio" name="crawlMode" value="site" checked onchange="updateCrawlPlaceholder()">
+          <span>整个网站</span>
+          <span class="crawl-mode-desc">自动发现并爬取该网站所有文章</span>
+        </label>
+        <label class="crawl-mode-option">
+          <input type="radio" name="crawlMode" value="page" onchange="updateCrawlPlaceholder()">
+          <span>单个网页</span>
+          <span class="crawl-mode-desc">仅抓取并入库这一个页面</span>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button class="modal-btn modal-btn-cancel" onclick="closeCrawlModal()">取消</button>
+        <button class="modal-btn modal-btn-primary" id="crawlStartBtn" onclick="startCrawl()">开始抓取</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js?v=2"></script>
 </body>
 </html>

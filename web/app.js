@@ -129,6 +129,7 @@ async function loadKnowledgeBases() {
     if (currentKbId) {
       loadSessions();
       loadDocs();
+      loadWebsites();
     }
   } catch (error) {
     console.error('Failed to load knowledge bases:', error);
@@ -200,6 +201,7 @@ async function selectKb(kbId) {
   showWelcomeScreen();
   loadSessions();
   loadDocs();
+  loadWebsites();
 }
 
 async function createKb() {
@@ -251,6 +253,102 @@ async function deleteKb(kbId) {
     showNotification('知识库已删除', 'success');
   } catch (error) {
     showNotification('删除失败', 'error');
+  }
+}
+
+/* ===== KB Websites Panel ===== */
+
+function toggleWebsitesPanel() {
+  const header = document.getElementById('kbWebsitesHeader');
+  const list = document.getElementById('kbWebsitesList');
+  header.classList.toggle('collapsed');
+  list.classList.toggle('collapsed');
+}
+
+function toggleWebsiteExpand(idx) {
+  const pagesEl = document.getElementById('ws-pages-' + idx);
+  const arrowEl = document.getElementById('ws-arrow-' + idx);
+  if (pagesEl) pagesEl.classList.toggle('collapsed');
+  if (arrowEl) arrowEl.classList.toggle('expanded');
+}
+
+async function loadWebsites() {
+  if (!currentKbId) {
+    document.getElementById('kbWebsitesCount').textContent = '0';
+    document.getElementById('kbWebsitesList').innerHTML = '<div class="kb-websites-empty">暂无网站</div>';
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/${currentKbId}/websites`);
+    const data = await response.json();
+    const websites = data.websites || [];
+
+    document.getElementById('kbWebsitesCount').textContent = websites.length;
+
+    if (websites.length === 0) {
+      document.getElementById('kbWebsitesList').innerHTML = '<div class="kb-websites-empty">暂无网站</div>';
+      return;
+    }
+
+    let html = '';
+    for (let i = 0; i < websites.length; i++) {
+      const site = websites[i];
+      const displayUrl = escapeHtml(site.url.replace(/^https?:\/\//, '').replace(/\/$/, ''));
+      const safeUrl = encodeURIComponent(site.url);
+      const pages = site.pages || [];
+
+      html += `
+        <div class="kb-website-item" onclick="toggleWebsiteExpand(${i})">
+          <svg class="website-expand-arrow" id="ws-arrow-${i}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+            <polyline points="9 6 15 12 9 18"></polyline>
+          </svg>
+          <span class="website-url" title="${escapeHtml(site.url)}">${displayUrl}</span>
+          <span class="website-chunks">${site.chunks} 块</span>
+          <button class="website-delete-btn" onclick="event.stopPropagation(); deleteWebsite('${safeUrl}')" title="删除网站">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+        <div class="website-pages collapsed" id="ws-pages-${i}">
+      `;
+
+      for (const page of pages) {
+        const pageTitle = escapeHtml(page.title || page.url.split('/').filter(Boolean).pop() || page.url);
+        html += `
+          <div class="website-page-item" title="${escapeHtml(page.url)}">
+            <span class="page-title">${pageTitle}</span>
+            <span class="page-chunks">${page.chunks}</span>
+          </div>
+        `;
+      }
+
+      if (pages.length === 0) {
+        html += '<div class="website-page-empty">暂无页面</div>';
+      }
+
+      html += '</div>';
+    }
+    document.getElementById('kbWebsitesList').innerHTML = html;
+  } catch (error) {
+    console.error('Failed to load websites:', error);
+  }
+}
+
+async function deleteWebsite(url) {
+  if (!currentKbId) return;
+  const displayUrl = decodeURIComponent(url).replace(/^https?:\/\//, '').replace(/\/$/, '');
+  if (!confirm(`确定要从知识库中删除网站「${displayUrl}」吗？`)) return;
+
+  try {
+    const response = await fetch(`/api/${currentKbId}/websites?url=${url}`, { method: 'DELETE' });
+    if (!response.ok) throw new Error('删除失败');
+    showNotification(`已删除「${displayUrl}」`, 'success');
+    loadWebsites();
+  } catch (error) {
+    showNotification(`删除失败：${error.message}`, 'error');
   }
 }
 
@@ -569,6 +667,158 @@ function scrollToBottom() {
   chatArea.scrollTop = chatArea.scrollHeight;
 }
 
+/* ===== Website Crawl ===== */
+
+let crawlMode = 'site'; // 'site' or 'page'
+
+function openCrawlModal() {
+  if (!currentKbId) {
+    showNotification('请先选择知识库', 'error');
+    return;
+  }
+  if (!modelLoaded) {
+    showNotification('请先启动模型', 'error');
+    return;
+  }
+  const modal = document.getElementById('crawlModal');
+  modal.classList.remove('hidden');
+  const input = document.getElementById('crawlUrlInput');
+  input.value = '';
+  crawlMode = 'site';
+  document.querySelector('input[name="crawlMode"][value="site"]').checked = true;
+  updateCrawlPlaceholder();
+  input.focus();
+}
+
+function closeCrawlModal() {
+  document.getElementById('crawlModal').classList.add('hidden');
+}
+
+function updateCrawlPlaceholder() {
+  const selected = document.querySelector('input[name="crawlMode"]:checked');
+  crawlMode = selected ? selected.value : 'site';
+  const input = document.getElementById('crawlUrlInput');
+  const title = document.getElementById('crawlModalTitle');
+  if (crawlMode === 'page') {
+    input.placeholder = '输入网页地址，如 https://example.com/article';
+    title.textContent = '添加网页到知识库';
+  } else {
+    input.placeholder = '输入网站地址，如 https://example.com';
+    title.textContent = '添加网站到知识库';
+  }
+}
+
+async function startCrawl() {
+  const url = document.getElementById('crawlUrlInput').value.trim();
+  if (!url) {
+    showNotification('请输入地址', 'error');
+    return;
+  }
+
+  try {
+    new URL(url);
+  } catch {
+    showNotification('请输入有效的地址', 'error');
+    return;
+  }
+
+  // Read current mode from radio
+  const selected = document.querySelector('input[name="crawlMode"]:checked');
+  crawlMode = selected ? selected.value : 'site';
+
+  closeCrawlModal();
+
+  const kbId = currentKbId;
+  const isSinglePage = crawlMode === 'page';
+
+  const progressContainer = document.getElementById('uploadProgress');
+  progressContainer.classList.add('active');
+  document.getElementById('uploadProgressFill').style.width = '0%';
+  document.getElementById('uploadProgressPercent').textContent = '0%';
+  document.getElementById('uploadProgressStage').textContent = isSinglePage ? '正在抓取网页...' : '正在发现文章列表...';
+
+  let eventSource = null;
+
+  try {
+    const endpoint = isSinglePage ? `/api/${kbId}/crawl-page` : `/api/${kbId}/crawl`;
+    const crawlResponse = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+
+    const result = await crawlResponse.json();
+
+    if (!result.success) throw new Error(result.error || '爬取失败');
+
+    const fileId = result.fileId;
+
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        eventSource.close();
+        uploadStates.delete(kbId);
+        showUploadProgressForKb(currentKbId);
+        reject(new Error('爬取超时'));
+      }, 1800000);
+
+      eventSource = new EventSource(`/api/${kbId}/upload-progress/${fileId}`);
+      uploadStates.set(kbId, { eventSource, latestProgress: null });
+
+      eventSource.onmessage = (event) => {
+        try {
+          const progress = JSON.parse(event.data);
+
+          const state = uploadStates.get(kbId);
+          if (state) state.latestProgress = progress;
+
+          if (kbId === currentKbId) updateProgressUI(progress);
+
+          if (progress.status === 'completed') {
+            clearTimeout(timeout); eventSource.close();
+            uploadStates.delete(kbId);
+            showUploadProgressForKb(currentKbId);
+            resolve(progress);
+          } else if (progress.status === 'failed') {
+            clearTimeout(timeout); eventSource.close();
+            uploadStates.delete(kbId);
+            showUploadProgressForKb(currentKbId);
+            reject(new Error(progress.error || '爬取失败'));
+          }
+        } catch (e) { console.error('Progress parse error:', e); }
+      };
+      eventSource.onerror = () => {
+        clearTimeout(timeout); eventSource.close();
+        uploadStates.delete(kbId);
+        showUploadProgressForKb(currentKbId);
+        reject(new Error('SSE 连接中断'));
+      };
+    });
+
+    showNotification('网站爬取成功！', 'success');
+    loadDocs();
+    loadWebsites();
+  } catch (error) {
+    showNotification(`爬取失败：${error.message}`, 'error');
+  } finally {
+    if (eventSource) eventSource.close();
+    uploadStates.delete(kbId);
+    showUploadProgressForKb(currentKbId);
+  }
+}
+
+// Handle Enter key in crawl URL input
+document.addEventListener('DOMContentLoaded', () => {
+  const crawlInput = document.getElementById('crawlUrlInput');
+  if (crawlInput) {
+    crawlInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        startCrawl();
+      }
+    });
+  }
+});
+
 /* ===== File Upload ===== */
 
 function handleFileSelect(event) {
@@ -739,7 +989,7 @@ async function sendMessage() {
     if (!response.ok) throw new Error('请求失败');
 
     const reader = response.body.getReader();
-    const decoder = new TextDecoder();
+    const decoder = new TextDecoder('utf-8');
     let sseBuffer = '';
     let doneReceived = false;
 
