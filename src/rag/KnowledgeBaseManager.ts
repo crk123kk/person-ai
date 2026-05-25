@@ -7,6 +7,7 @@ export interface KnowledgeBase {
   id: string;
   name: string;
   createdAt: string;
+  systemPrompt?: string;
 }
 
 export class KnowledgeBaseManager {
@@ -92,6 +93,17 @@ export class KnowledgeBaseManager {
     fs.rmSync(kbDir, { recursive: true, force: true });
     logger.info(`Knowledge base deleted: ${id}`);
     return true;
+  }
+
+  /** Update the system prompt for a KB */
+  updateSystemPrompt(id: string, systemPrompt: string): KnowledgeBase | null {
+    const kb = this.get(id);
+    if (!kb) return null;
+    kb.systemPrompt = systemPrompt;
+    const metaPath = path.join(this.baseDir, id, 'meta.json');
+    fs.writeFileSync(metaPath, JSON.stringify(kb, null, 2), 'utf-8');
+    logger.info(`System prompt updated for KB: ${id}`);
+    return kb;
   }
 
   /** Get the documents directory for a KB */

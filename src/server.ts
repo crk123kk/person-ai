@@ -113,7 +113,12 @@ export async function startServer(port: number): Promise<number> {
   // 获取或创建 RAGService 实例（懒加载）
   function getRagService(kbId: string): RAGService {
     if (!ragInstances.has(kbId)) {
-      ragInstances.set(kbId, new RAGService(kbId));
+      const rag = new RAGService(kbId);
+      const kb = kbManager.get(kbId);
+      if (kb?.systemPrompt) {
+        rag.setSystemPrompt(kb.systemPrompt);
+      }
+      ragInstances.set(kbId, rag);
     }
     return ragInstances.get(kbId)!;
   }
@@ -192,13 +197,39 @@ export async function startServer(port: number): Promise<number> {
     res.json({ success: true });
   });
 
+  // ===== 知识库提示词 =====
+
+  app.get('/api/:kbId/prompt', (req, res) => {
+    const kb = kbManager.get(req.params.kbId);
+    if (!kb) return res.status(404).json({ error: '知识库不存在' });
+    res.json({ systemPrompt: kb.systemPrompt || '' });
+  });
+
+  app.put('/api/:kbId/prompt', (req, res) => {
+    const { kbId } = req.params;
+    const { systemPrompt } = req.body;
+    if (typeof systemPrompt !== 'string') return res.status(400).json({ error: '缺少 systemPrompt 参数' });
+    const kb = kbManager.updateSystemPrompt(kbId, systemPrompt);
+    if (!kb) return res.status(404).json({ error: '知识库不存在' });
+    // 刷新内存中的 RAGService 实例
+    if (ragInstances.has(kbId)) {
+      ragInstances.get(kbId)!.setSystemPrompt(systemPrompt);
+    }
+    res.json({ success: true });
+  });
+
   // ===== 模型状态（全局，不依赖 KB）=====
 
   app.get('/api/model/status', async (_req, res) => {
     try {
-      // 用任意一个 RAG 实例获取模型状态
       const firstKb = kbManager.list()[0];
-      if (!firstKb) return res.json({ loaded: false, model: 'unknown' });
+      if (!firstKb) {
+        // 没有知识库时仍返回配置中的模型名，避免前端显示 unknown
+        const model = config.llmProvider === 'ollama' ? (config.ollamaModel || 'llama3')
+                    : config.llmProvider === 'openai' ? 'gpt-4o-mini'
+                    : 'claude-sonnet-4-6-20250929';
+        return res.json({ provider: config.llmProvider, model, loaded: false, loading: false });
+      }
       const rag = getRagService(firstKb.id);
       res.json(await rag.getModelStatus());
     } catch (error) {

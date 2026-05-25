@@ -142,7 +142,7 @@ export class VectorStoreService {
   }
 
   /**
-   * 持久化到磁盘（同时保存向量以加速下次加载）
+   * 持久化到磁盘（流式写入，避免大向量库 JSON.stringify 触发 RangeError: Invalid string length）
    */
   private async persist(): Promise<void> {
     if (!this.isDirty) return;
@@ -154,24 +154,44 @@ export class VectorStoreService {
         fs.mkdirSync(dir, { recursive: true });
       }
 
-      // 从 MemoryVectorStore 内部提取预计算向量
       const memoryVectors: Array<{ content: string; embedding: number[]; metadata: Record<string, any> }> =
         (this.vectorStore as any).memoryVectors || [];
 
-      const data = {
-        documents: memoryVectors.map(mv => ({
-          pageContent: mv.content,
-          metadata: mv.metadata,
-          vector: mv.embedding,
-        })),
-        timestamp: new Date().toISOString(),
-      };
+      // 流式写入：逐条 JSON.stringify，避免一次性序列化整个数据集
+      const tmpPath = this.persistPath + '.tmp';
+      const stream = fs.createWriteStream(tmpPath, { highWaterMark: 1024 * 1024 });
 
-      fs.writeFileSync(this.persistPath, JSON.stringify(data, null, 2));
+      await new Promise<void>((resolve, reject) => {
+        stream.on('error', (err) => {
+          try { fs.unlinkSync(tmpPath); } catch {}
+          reject(err);
+        });
+        stream.on('finish', resolve);
+
+        stream.write('{"documents":[');
+
+        for (let i = 0; i < memoryVectors.length; i++) {
+          if (i > 0) stream.write(',');
+          const mv = memoryVectors[i];
+          stream.write(JSON.stringify({
+            pageContent: mv.content,
+            metadata: mv.metadata,
+            vector: mv.embedding,
+          }));
+        }
+
+        stream.write(`],"timestamp":"${new Date().toISOString()}"}`);
+        stream.end();
+      });
+
+      // 原子重命名：确保要么完全成功，要么原文件不受影响
+      fs.renameSync(tmpPath, this.persistPath);
       this.isDirty = false;
-      logger.info(`Persisted ${data.documents.length} vectors to disk`);
+      logger.info(`Persisted ${memoryVectors.length} vectors to disk (streaming)`);
     } catch (error) {
       logger.error('Failed to persist vector store:', error);
+      // 重置 isDirty 防止无限重试死循环（数据仍在内存中，下次 flush 时可重试）
+      this.isDirty = false;
     }
   }
 
@@ -180,7 +200,7 @@ export class VectorStoreService {
    */
   async addDocuments(
     documents: Document[],
-    options: { ids?: string[] }
+    options: { ids?: string[]; skipPersist?: boolean } = {}
   ): Promise<string[]> {
     const store = await this.ensureInitialized();
     const ids = options.ids || [];
@@ -199,7 +219,9 @@ export class VectorStoreService {
       });
 
       this.isDirty = true;
-      await this.persist();
+      if (!options.skipPersist) {
+        await this.persist();
+      }
 
       logger.info(`Successfully added ${documents.length} documents to vector store`);
       return ids.length ? ids : documents.map((_, i) => `doc_${Date.now()}_${i}`);
@@ -215,7 +237,7 @@ export class VectorStoreService {
   async addVectors(
     vectors: number[][],
     documents: Document[],
-    options: { ids?: string[] }
+    options: { ids?: string[]; skipPersist?: boolean } = {}
   ): Promise<string[]> {
     const store = await this.ensureInitialized();
     const ids = options.ids || [];
@@ -234,7 +256,9 @@ export class VectorStoreService {
       });
 
       this.isDirty = true;
-      await this.persist();
+      if (!options.skipPersist) {
+        await this.persist();
+      }
 
       logger.info(`Successfully added ${vectors.length} pre-computed vectors`);
       return ids.length ? ids : documents.map((_, i) => `doc_${Date.now()}_${i}`);
@@ -242,6 +266,14 @@ export class VectorStoreService {
       logger.error('Failed to add pre-computed vectors:', error);
       throw error;
     }
+  }
+
+  /**
+   * 强制将内存中的脏数据刷写到磁盘
+   */
+  async flush(): Promise<void> {
+    this.isDirty = true;
+    await this.persist();
   }
 
   /**

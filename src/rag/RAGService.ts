@@ -64,6 +64,7 @@ export class RAGService {
   private chatHistory: ChatHistoryManager;
   private circuitBreaker: CircuitBreaker;
   private kbId: string;
+  private customSystemPrompt: string = '';
 
   constructor(kbId?: string) {
     this.kbId = kbId || 'default';
@@ -89,6 +90,11 @@ export class RAGService {
     this.circuitBreaker = new CircuitBreaker();
 
     logger.info(`RAG service initialized${kbId ? ` for KB: ${kbId}` : ''}`);
+  }
+
+  /** Set custom system prompt for this KB */
+  setSystemPrompt(prompt: string): void {
+    this.customSystemPrompt = prompt;
   }
 
   /**
@@ -193,7 +199,7 @@ export class RAGService {
 
       // Step 5: 存储向量（用预计算向量直接存储，避免 MemoryVectorStore 内部二次嵌入）
       const batchIds = batchDocs.map((_, idx) => `${VectorStoreService.sanitizeId(filePath)}_${batchStart + idx}`);
-      const storedIds = await this.vectorStore.addVectors(batchVectors, batchDocs, { ids: batchIds });
+      const storedIds = await this.vectorStore.addVectors(batchVectors, batchDocs, { ids: batchIds, skipPersist: true });
       allVectorIds.push(...storedIds);
 
       // 更新存储进度（与向量化同步推进）
@@ -214,6 +220,9 @@ export class RAGService {
       progressManager.updateStage(fid, 'embed', { status: 'completed', progress: 100 });
       progressManager.updateStage(fid, 'store', { status: 'completed', progress: 100 });
     }
+
+    // 所有批次写入内存后，一次性持久化到磁盘
+    await this.vectorStore.flush();
     logger.info(`[Pipeline] Done: ${allVectorIds.length} vectors embedded+stored`);
 
     return {
@@ -351,7 +360,7 @@ export class RAGService {
         return `${sanitized}_${batchStart + idx}`;
       });
 
-      const storedIds = await this.vectorStore.addVectors(batchVectors, batchDocs, { ids: safeIds });
+      const storedIds = await this.vectorStore.addVectors(batchVectors, batchDocs, { ids: safeIds, skipPersist: true });
       allVectorIds.push(...storedIds);
 
       if (progressManager) {
@@ -365,6 +374,9 @@ export class RAGService {
 
     progressManager.updateStage(fileId, 'embed', { status: 'completed', progress: 100 });
     progressManager.updateStage(fileId, 'store', { status: 'completed', progress: 100 });
+
+    // 所有批次写入内存后，一次性持久化到磁盘
+    await this.vectorStore.flush();
     logger.info(`[WebPipeline] Done: ${allVectorIds.length} vectors embedded+stored`);
 
     // 返回按来源分组的结果
@@ -421,8 +433,8 @@ export class RAGService {
     query: string,
     topK: number = config.defaultTopK
   ): Promise<RetrievalResult & { scores: number[] }> {
-    // 1. 向量检索（扩大候选池）
-    const candidateK = topK * 3;
+    // 1. 向量检索（扩大候选池，确保多来源不被单一文档淹没）
+    const candidateK = topK * 10;
     const vectorResults = await this.circuitBreaker.execute(async () => {
       return this.vectorStore.similaritySearchWithScore(query, candidateK);
     });
@@ -458,8 +470,9 @@ export class RAGService {
       }
     }
 
-    // 4. 按合并分数降序排列，取 topK
+    // 4. 按合并分数降序排列，过滤低分，取 topK
     const deduped = Array.from(seen.values())
+      .filter(r => r.score >= 0.6)
       .sort((a, b) => b.score - a.score)
       .slice(0, topK);
 
@@ -529,24 +542,16 @@ export class RAGService {
     // 检索
     const { documents: rawDocs, scores: rawScores } = await this.retrieveWithScore(question);
 
-    // 最高混合分 < 0.6 视为未命中
-    const topScore = rawScores.length > 0 ? rawScores[0] : 0;
-    if (topScore < 0.6) {
+    // retrieveWithScore 已过滤 score >= 0.6，空结果即无匹配
+    if (rawDocs.length === 0) {
       this.logUnansweredQuestion(question);
       yield { type: 'token', token: '抱歉，知识库中没有找到与您问题相关的内容。请尝试换个方式提问。' };
       yield { type: 'done', sessionId: session.id };
       return;
     }
 
-    // 只取 >= 0.5 的结果
-    const filtered: { doc: Document; score: number }[] = [];
-    for (let i = 0; i < rawDocs.length; i++) {
-      if (rawScores[i] >= 0.5) {
-        filtered.push({ doc: rawDocs[i], score: rawScores[i] });
-      }
-    }
-    const documents = filtered.map(f => f.doc);
-    const scores = filtered.map(f => f.score);
+    const documents = rawDocs;
+    const scores = rawScores;
 
     // 更新会话的向量 ID
     const vectorIds = documents.map(d => d.metadata.source);
@@ -650,26 +655,8 @@ export class RAGService {
     // 添加用户消息
     this.chatHistory.addUserMessage(session.id, question);
 
-    // 检索
-    const { documents: rawDocs, scores: rawScores } = await this.retrieveWithScore(question);
-
-    // 最高混合分 < 0.6 视为未命中
-    const topScore = rawScores.length > 0 ? rawScores[0] : 0;
-    if (topScore < 0.6) {
-      const response = await this.handleNoResults(question);
-      this.chatHistory.addAssistantMessage(session.id, response.answer);
-      return { ...response, sessionId: session.id };
-    }
-
-    // 只取 >= 0.5 的结果
-    const filtered: { doc: Document; score: number }[] = [];
-    for (let i = 0; i < rawDocs.length; i++) {
-      if (rawScores[i] >= 0.5) {
-        filtered.push({ doc: rawDocs[i], score: rawScores[i] });
-      }
-    }
-    const documents = filtered.map(f => f.doc);
-    const scores = filtered.map(f => f.score);
+    // 检索（retrieveWithScore 已过滤 score >= 0.6）
+    const { documents, scores } = await this.retrieveWithScore(question);
 
     if (documents.length === 0) {
       const response = await this.handleNoResults(question);
@@ -779,13 +766,27 @@ export class RAGService {
     context: string,
     history?: Message[]
   ): string {
-    const systemPrompt = `你是一个 RAG 智能助手，你的知识完全来源于下方提供的「检索内容」。
+    const defaultSystemPrompt = `你是一个 RAG 智能助手，你的知识完全来源于下方提供的「检索内容」。
 
 你需要做的是：
 - 理解用户的问题，从检索内容中找到相关信息
 - 对相关内容进行梳理、归纳，用清晰的结构（标题、分点、列表）呈现给用户
 - 只输出检索内容中有的信息，不推测、不补充、不扩展
-- 若检索内容无法回答用户问题，直接告知用户"当前知识库中未找到相关内容"
+- 若检索内容无法回答用户问题，直接告知用户"当前知识库中未找到相关内容"`;
+
+    const systemPrompt = this.customSystemPrompt || defaultSystemPrompt;
+
+    // Extract blocked words and add explicit instruction
+    let blockedInstruction = '';
+    const blockedMatch = systemPrompt.match(/【屏蔽词】\n([\s\S]*?)(?=\n【|$)/);
+    if (blockedMatch && blockedMatch[1].trim()) {
+      const words = blockedMatch[1].trim().split('\n').map(w => w.trim()).filter(Boolean);
+      if (words.length > 0) {
+        blockedInstruction = `\n\n重要：回答中绝对不能包含以下词汇：${words.join('、')}。如果检索内容中包含这些词汇，必须用「***」替代。`;
+      }
+    }
+
+    const fullPrompt = `${systemPrompt}${blockedInstruction}
 
 检索内容：
 ${context}
@@ -796,10 +797,10 @@ ${context}
         .slice(-6)
         .map(m => `${m.role}: ${m.content}`)
         .join('\n');
-      return `${systemPrompt}\n对话历史:\n${historyText}\n\n用户：${question}\n助手:`;
+      return `${fullPrompt}\n对话历史:\n${historyText}\n\n用户：${question}\n助手:`;
     }
 
-    return `${systemPrompt}\n用户：${question}\n助手:`;
+    return `${fullPrompt}\n用户：${question}\n助手:`;
   }
 
   /**

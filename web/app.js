@@ -16,6 +16,7 @@ const uploadStates = new Map(); // kbId -> { eventSource, latestProgress }
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   initSidebarResize();
+  initRightSidebarResize();
   loadKnowledgeBases();
   checkModelStatus();
 });
@@ -204,6 +205,7 @@ async function selectKb(kbId) {
   loadDocs();
   loadWebsites();
   loadUnanswered();
+  loadPrompt(kbId);
 }
 
 async function createKb() {
@@ -419,6 +421,188 @@ function toggleConversationList() {
   const list = document.getElementById('conversationList');
   header.classList.toggle('collapsed');
   list.classList.toggle('collapsed');
+}
+
+/* ===== Right Sidebar (Prompt Panel) ===== */
+
+function toggleRightSidebar() {
+  const sidebar = document.getElementById('rightSidebar');
+  sidebar.classList.toggle('collapsed');
+  // Load prompt when opening for the first time
+  if (!sidebar.classList.contains('collapsed') && currentKbId) {
+    loadPrompt(currentKbId);
+  }
+}
+
+function initRightSidebarResize() {
+  const sidebar = document.getElementById('rightSidebar');
+  const handle = document.getElementById('rightSidebarResizeHandle');
+  if (!sidebar || !handle) return;
+
+  const saved = localStorage.getItem('rightSidebarWidth');
+  if (saved) {
+    const w = parseInt(saved);
+    if (w >= 240 && w <= 560) {
+      sidebar.style.setProperty('--right-sidebar-width', w + 'px');
+    }
+  }
+
+  let dragging = false;
+  let startX = 0;
+  let startWidth = 0;
+
+  handle.addEventListener('mousedown', function(e) {
+    dragging = true;
+    startX = e.clientX;
+    startWidth = sidebar.offsetWidth;
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', function(e) {
+    if (!dragging) return;
+    // Dragging left edge: moving mouse left increases width
+    const delta = startX - e.clientX;
+    const newWidth = Math.min(560, Math.max(240, startWidth + delta));
+    sidebar.style.setProperty('--right-sidebar-width', newWidth + 'px');
+  });
+
+  document.addEventListener('mouseup', function() {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    const width = sidebar.offsetWidth;
+    if (width >= 240 && width <= 560) {
+      localStorage.setItem('rightSidebarWidth', width);
+    }
+  });
+}
+
+function togglePromptField(field) {
+  const body = document.getElementById('promptField' + field.charAt(0).toUpperCase() + field.slice(1));
+  const chevron = document.getElementById('promptChevron' + field.charAt(0).toUpperCase() + field.slice(1));
+  if (body) body.classList.toggle('collapsed');
+  if (chevron) chevron.classList.toggle('collapsed');
+}
+
+async function loadPrompt(kbId) {
+  const fields = ['promptRole', 'promptGoal', 'promptSteps', 'promptConstraints', 'promptBlocked', 'promptCustom'];
+  if (!kbId) {
+    fields.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    return;
+  }
+  try {
+    const response = await fetch(`/api/${kbId}/prompt`);
+    const data = await response.json();
+    const prompt = data.systemPrompt || '';
+    // Parse structured prompt back into fields
+    const sections = parsePromptSections(prompt);
+    document.getElementById('promptRole').value = sections.role || '';
+    document.getElementById('promptGoal').value = sections.goal || '';
+    document.getElementById('promptSteps').value = sections.steps || '';
+    document.getElementById('promptConstraints').value = sections.constraints || '';
+    document.getElementById('promptBlocked').value = sections.blocked || '';
+    document.getElementById('promptCustom').value = sections.custom || '';
+  } catch {
+    fields.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  }
+}
+
+function parsePromptSections(prompt) {
+  const result = { role: '', goal: '', steps: '', constraints: '', blocked: '', custom: '' };
+  if (!prompt) return result;
+
+  const sectionMap = {
+    '【角色】': 'role',
+    '【目标】': 'goal',
+    '【执行步骤】': 'steps',
+    '【约束条件】': 'constraints',
+    '【屏蔽词】': 'blocked',
+    '【自定义补充】': 'custom',
+  };
+
+  const lines = prompt.split('\n');
+  let currentSection = null;
+  let currentLines = [];
+
+  for (const line of lines) {
+    let foundSection = null;
+    for (const [header, key] of Object.entries(sectionMap)) {
+      if (line.trim() === header) {
+        foundSection = key;
+        break;
+      }
+    }
+    if (foundSection) {
+      if (currentSection) {
+        result[currentSection] = currentLines.join('\n').trim();
+      }
+      currentSection = foundSection;
+      currentLines = [];
+    } else if (currentSection) {
+      currentLines.push(line);
+    }
+  }
+  if (currentSection) {
+    result[currentSection] = currentLines.join('\n').trim();
+  }
+
+  return result;
+}
+
+function buildPromptFromFields() {
+  const role = document.getElementById('promptRole').value.trim();
+  const goal = document.getElementById('promptGoal').value.trim();
+  const steps = document.getElementById('promptSteps').value.trim();
+  const constraints = document.getElementById('promptConstraints').value.trim();
+  const blocked = document.getElementById('promptBlocked').value.trim();
+  const custom = document.getElementById('promptCustom').value.trim();
+
+  const parts = [];
+  if (role) parts.push('【角色】\n' + role);
+  if (goal) parts.push('【目标】\n' + goal);
+  if (steps) parts.push('【执行步骤】\n' + steps);
+  if (constraints) parts.push('【约束条件】\n' + constraints);
+  if (blocked) parts.push('【屏蔽词】\n' + blocked);
+  if (custom) parts.push('【自定义补充】\n' + custom);
+
+  return parts.join('\n\n');
+}
+
+async function savePrompt() {
+  if (!currentKbId) { showNotification('请先选择知识库', 'error'); return; }
+  const systemPrompt = buildPromptFromFields();
+  try {
+    const response = await fetch(`/api/${currentKbId}/prompt`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ systemPrompt }),
+    });
+    if (!response.ok) throw new Error('保存失败');
+    showNotification('提示词已保存', 'success');
+  } catch {
+    showNotification('保存提示词失败', 'error');
+  }
+}
+
+async function resetPrompt() {
+  if (!currentKbId) return;
+  const fields = ['promptRole', 'promptGoal', 'promptSteps', 'promptConstraints', 'promptBlocked', 'promptCustom'];
+  fields.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  try {
+    await fetch(`/api/${currentKbId}/prompt`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ systemPrompt: '' }),
+    });
+    showNotification('已恢复默认提示词', 'success');
+  } catch {
+    showNotification('重置提示词失败', 'error');
+  }
 }
 
 async function loadDocs() {
@@ -1217,13 +1401,14 @@ async function checkModelStatus() {
 
     modelLoaded = status.loaded;
 
+    const modelName = status.model || '模型';
     if (status.loaded) {
       statusDiv.className = 'model-status loaded';
-      statusDiv.querySelector('.model-status-text').textContent = `${status.model} 已就绪`;
+      statusDiv.querySelector('.model-status-text').textContent = `${modelName} 已就绪`;
       warmupBtn.style.display = 'none';
     } else {
       statusDiv.className = 'model-status unloaded';
-      statusDiv.querySelector('.model-status-text').textContent = `${status.model} 未加载`;
+      statusDiv.querySelector('.model-status-text').textContent = `${modelName} 未加载`;
       warmupBtn.style.display = 'inline-block';
     }
   } catch (error) {
