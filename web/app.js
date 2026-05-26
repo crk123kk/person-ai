@@ -132,6 +132,7 @@ async function loadKnowledgeBases() {
       loadDocs();
       loadWebsites();
       loadUnanswered();
+      loadPrompt(currentKbId);
     }
   } catch (error) {
     console.error('Failed to load knowledge bases:', error);
@@ -820,19 +821,20 @@ async function deleteSession(sessionId) {
 /* ===== Chat Display ===== */
 
 function showWelcomeScreen() {
-  const chatArea = document.getElementById('chatArea');
+  const chatContent = document.getElementById('chatContent');
   const kb = kbList.find(k => k.id === currentKbId);
-  chatArea.innerHTML = `
+  chatContent.innerHTML = `
     <div class="welcome" id="welcomeScreen">
       <h1 class="welcome-title">有什么可以帮你的？</h1>
       ${kb ? `<p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 8px;">知识库：${escapeHtml(kb.name)}</p>` : ''}
     </div>
   `;
+  updateChatNav();
 }
 
 function showChatMessages(messages) {
-  const chatArea = document.getElementById('chatArea');
-  chatArea.innerHTML = '<div class="messages-container" id="messagesContainer"></div>';
+  const chatContent = document.getElementById('chatContent');
+  chatContent.innerHTML = '<div class="messages-container" id="messagesContainer"></div>';
 
   const container = document.getElementById('messagesContainer');
   for (const msg of messages) {
@@ -843,7 +845,7 @@ function showChatMessages(messages) {
 function appendMessage(text, role) {
   let container = document.getElementById('messagesContainer');
   if (!container) {
-    document.getElementById('chatArea').innerHTML = '<div class="messages-container" id="messagesContainer"></div>';
+    document.getElementById('chatContent').innerHTML = '<div class="messages-container" id="messagesContainer"></div>';
     container = document.getElementById('messagesContainer');
   }
 
@@ -858,6 +860,8 @@ function appendMessage(text, role) {
       </div>
     `;
   } else {
+    const userMsgCount = container.querySelectorAll('.message-row.user').length;
+    row.setAttribute('data-msg-index', userMsgCount);
     row.innerHTML = `
       <div class="message-content">${escapeHtml(text)}</div>
       <div class="message-avatar user-avatar">You</div>
@@ -866,12 +870,13 @@ function appendMessage(text, role) {
 
   container.appendChild(row);
   scrollToBottom();
+  updateChatNav();
 }
 
 function createAssistantMessage() {
   let container = document.getElementById('messagesContainer');
   if (!container) {
-    document.getElementById('chatArea').innerHTML = '<div class="messages-container" id="messagesContainer"></div>';
+    document.getElementById('chatContent').innerHTML = '<div class="messages-container" id="messagesContainer"></div>';
     container = document.getElementById('messagesContainer');
   }
 
@@ -900,8 +905,8 @@ function createAssistantMessage() {
 }
 
 function scrollToBottom() {
-  const chatArea = document.getElementById('chatArea');
-  chatArea.scrollTop = chatArea.scrollHeight;
+  const chatContent = document.getElementById('chatContent');
+  chatContent.scrollTop = chatContent.scrollHeight;
 }
 
 /* ===== Website Crawl ===== */
@@ -1306,8 +1311,8 @@ async function sendMessage() {
 }
 
 function renderSources(sourcesDiv, sources) {
-  const MIN_SCORE = 0.55;
-  const MAX_SOURCES = 4;
+  const MIN_SCORE = 0;
+  const MAX_SOURCES = 6;
 
   const getDisplayName = (s) => {
     if (s.metadata.displayName) return s.metadata.displayName;
@@ -1476,3 +1481,52 @@ function showNotification(message, type = 'info') {
     setTimeout(() => notification.remove(), 250);
   }, 3000);
 }
+
+/* ===== Chat Navigation (TOC) ===== */
+
+let chatNavVisible = false;
+
+function toggleChatNav() {
+  chatNavVisible = !chatNavVisible;
+  const nav = document.getElementById('chatNav');
+  const showBtn = document.getElementById('chatNavShowBtn');
+  if (nav) nav.classList.toggle('hidden', !chatNavVisible);
+  if (showBtn) showBtn.style.display = chatNavVisible ? 'none' : '';
+}
+
+function updateChatNav() {
+  const list = document.getElementById('chatNavList');
+  if (!list) return;
+
+  const chatContent = document.getElementById('chatContent');
+  const userRows = chatContent.querySelectorAll('.message-row.user[data-msg-index]');
+
+  const hasMessages = userRows.length > 0;
+
+  if (!hasMessages) {
+    list.innerHTML = '<div class="chat-nav-empty">暂无对话</div>';
+    return;
+  }
+
+  let html = '';
+  userRows.forEach((row, i) => {
+    const text = row.querySelector('.message-content')?.textContent?.trim() || '';
+    const truncated = text.length > 28 ? text.substring(0, 28) + '...' : text;
+    html += `<div class="chat-nav-item" data-nav-index="${i}" onclick="scrollToMessage(${i})" title="${escapeHtml(text)}">${i + 1}. ${escapeHtml(truncated)}</div>`;
+  });
+  list.innerHTML = html;
+}
+
+function scrollToMessage(index) {
+  const chatContent = document.getElementById('chatContent');
+  const row = chatContent.querySelector(`.message-row.user[data-msg-index="${index}"]`);
+  if (row) {
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    row.style.transition = 'background 0.3s';
+    row.style.background = 'var(--active-bg)';
+    setTimeout(() => { row.style.background = ''; }, 1200);
+  }
+  // Navigate then collapse
+  if (chatNavVisible) toggleChatNav();
+}
+

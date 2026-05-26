@@ -10,6 +10,7 @@
       "WebFetch",
       "WebSearch",
       "NotebookEdit",
+      "PowerShell(*)",
       "PowerShell($port = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess; if \\($port\\) { Stop-Process -Id $port -Force; Start-Sleep -Seconds 2; Write-Output \"Killed process $port\" } else { Write-Output \"No process on port 3000\" })",
       "PowerShell(Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; Start-Sleep -Seconds 2; Write-Output \"Done\")",
       "PowerShell(Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; Write-Output \"Done\")",

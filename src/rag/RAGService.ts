@@ -106,6 +106,9 @@ export class RAGService {
 
     logger.info(`[Pipeline] Processing: ${filePath}`);
 
+    // 清除同一来源的旧向量，避免重复/覆盖
+    await this.vectorStore.deleteBySource(filePath);
+
     // Step 1: 加载文档
     if (progressManager) {
       progressManager.updateStage(fid, 'load', { status: 'processing', progress: 0 });
@@ -294,6 +297,10 @@ export class RAGService {
 
     logger.info(`[WebPipeline] Crawled ${documents.length} pages from ${siteUrl}`);
 
+    // 清除即将重新入库的页面来源的旧向量，避免重复（批量删除，只重建一次向量库）
+    const sourcesToReplace = [...new Set(documents.map(d => d.metadata.source).filter(Boolean))];
+    await this.vectorStore.deleteBySources(sourcesToReplace);
+
     // Phase 2: 清洗
     progressManager.updateStage(fileId, 'clean', { status: 'processing', progress: 0 });
     const cleanedDocs = documents.map(doc => ({
@@ -427,7 +434,7 @@ export class RAGService {
   }
 
   /**
-   * 检索带分数（向量 + 关键词混合检索）
+   * 检索带分数（向量 + 关键词混合检索，按相似度排序，不受上传顺序影响）
    */
   async retrieveWithScore(
     query: string,
@@ -445,23 +452,19 @@ export class RAGService {
     // 3. 合并：用 (source + chunkIndex) 作为 key 去重
     const seen = new Map<string, { doc: Document; score: number }>();
 
-    // 向量结果归一化
-    let maxVecScore = 0;
-    for (const [, score] of vectorResults) {
-      if (score > maxVecScore) maxVecScore = score;
-    }
+    // 向量结果：直接使用原始余弦相似度，不做归一化
+    // 这样 0.77 的相似度永远是 0.77，不受其他文档影响
     for (const [doc, score] of vectorResults) {
       const key = doc.metadata.source + '@' + (doc.metadata.chunkIndex ?? doc.metadata.page ?? '');
-      const normalizedScore = maxVecScore > 0 ? score / maxVecScore : 0;
-      if (!seen.has(key) || seen.get(key)!.score < normalizedScore) {
-        seen.set(key, { doc, score: normalizedScore * 0.6 });
+      if (!seen.has(key) || seen.get(key)!.score < score) {
+        seen.set(key, { doc, score });
       }
     }
 
-    // 关键词结果合并
+    // 关键词结果合并：匹配到的文档在原始相似度基础上加分
     for (const { doc, score } of keywordResults) {
       const key = doc.metadata.source + '@' + (doc.metadata.chunkIndex ?? doc.metadata.page ?? '');
-      const keywordBoost = score * 0.4;
+      const keywordBoost = score * 0.2;
       if (seen.has(key)) {
         seen.get(key)!.score += keywordBoost;
       } else {
@@ -470,16 +473,45 @@ export class RAGService {
       }
     }
 
-    // 4. 按合并分数降序排列，过滤低分，取 topK
-    const deduped = Array.from(seen.values())
-      .filter(r => r.score >= 0.6)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, topK);
+    // 4. 按合并分数降序排列，过滤低分
+    const sorted = Array.from(seen.values())
+      .filter(r => r.score >= config.similarityThreshold)
+      .sort((a, b) => b.score - a.score);
 
-    const documents = deduped.map(r => r.doc);
-    const scores = deduped.map(r => r.score);
+    // 5. 来源多样性：每个来源最多取 N 个分块，避免单一文档垄断结果
+    const MAX_PER_SOURCE = 5;
+    const sourceCounts = new Map<string, number>();
+    const diverse: { doc: Document; score: number }[] = [];
+    for (const r of sorted) {
+      const src = r.doc.metadata.source || '';
+      const count = sourceCounts.get(src) || 0;
+      if (count < MAX_PER_SOURCE) {
+        diverse.push(r);
+        sourceCounts.set(src, count + 1);
+      }
+      if (diverse.length >= topK) break;
+    }
 
-    logger.info('Retrieved ' + vectorResults.length + ' vector + ' + keywordResults.length + ' keyword, ' + deduped.length + ' merged, top score: ' + (scores[0] ? scores[0].toFixed(3) : 'N/A'));
+    const documents = diverse.map(r => r.doc);
+    const scores = diverse.map(r => r.score);
+
+    // 调试日志：输出每个来源的命中数和分数范围
+    const sourceSummary = new Map<string, { count: number; minScore: number; maxScore: number }>();
+    for (const r of diverse) {
+      const src = r.doc.metadata.source || 'unknown';
+      const entry = sourceSummary.get(src);
+      if (entry) {
+        entry.count++;
+        entry.minScore = Math.min(entry.minScore, r.score);
+        entry.maxScore = Math.max(entry.maxScore, r.score);
+      } else {
+        sourceSummary.set(src, { count: 1, minScore: r.score, maxScore: r.score });
+      }
+    }
+    const sourceDetails = Array.from(sourceSummary.entries())
+      .map(([src, info]) => `${src.split(/[\\/]/).pop()}: ${info.count}条 (${info.minScore.toFixed(3)}~${info.maxScore.toFixed(3)})`)
+      .join(', ');
+    logger.info('Retrieved ' + vectorResults.length + ' vector + ' + keywordResults.length + ' keyword, ' + diverse.length + ' merged, top score: ' + (scores[0] ? scores[0].toFixed(3) : 'N/A') + ' | ' + sourceDetails);
 
     return { documents, scores };
   }

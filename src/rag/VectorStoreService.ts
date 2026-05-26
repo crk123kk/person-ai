@@ -248,7 +248,7 @@ export class VectorStoreService {
       await store.addVectors(vectors, documents);
 
       documents.forEach((doc, i) => {
-        const id = ids[i] || `doc_${Date.now()}_${i}`;
+        const id = ids[i] || this.buildCacheId(doc.metadata, i);
         this.cachedDocs.set(id, {
           pageContent: doc.pageContent,
           metadata: doc.metadata,
@@ -361,20 +361,22 @@ export class VectorStoreService {
       if (idsToDelete.length > 0) {
         idsToDelete.forEach(id => this.cachedDocs.delete(id));
 
-        // 重建向量存储（使用预存向量避免重嵌入）
+        const oldMemoryVectors: Array<{ content: string; embedding: number[]; metadata: Record<string, any> }> =
+          (this.vectorStore as any).memoryVectors || [];
+
         this.vectorStore = new MemoryVectorStore(this.embeddings);
-        if (this.cachedDocs.size > 0) {
-          const memoryVectors = (this.vectorStore as any).memoryVectors || [];
-          // Note: we're starting fresh, so memoryVectors is empty. We need to use the
-          // vectors from the persistence file. Instead, rebuild from cached docs.
-          // Since memoryVectors was cleared, we fetch vectors from the still-active
-          // old store before it gets replaced.
-          // Actually, let's just use addDocuments here since the remaining doc count
-          // is typically small after a deletion. For large deletes, this is acceptable.
-          const remainingDocs = Array.from(this.cachedDocs.values()).map(
-            d => new Document({ pageContent: d.pageContent, metadata: d.metadata })
-          );
-          await this.vectorStore.addDocuments(remainingDocs);
+
+        if (oldMemoryVectors.length > 0) {
+          // 精确匹配 source，不用 sanitizeId 避免误删其他来源
+          const remaining = oldMemoryVectors.filter(mv => mv.metadata?.source !== source);
+
+          if (remaining.length > 0) {
+            const docs = remaining.map(r =>
+              new Document({ pageContent: r.content, metadata: r.metadata })
+            );
+            const vectors = remaining.map(r => r.embedding);
+            await this.vectorStore.addVectors(vectors, docs);
+          }
         }
 
         this.isDirty = true;
@@ -384,6 +386,55 @@ export class VectorStoreService {
       }
     } catch (error) {
       logger.error('Failed to delete documents:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 批量删除多个来源（只重建一次向量库，避免多次重建导致性能问题和误删）
+   */
+  async deleteBySources(sources: string[]): Promise<void> {
+    if (sources.length === 0) return;
+    await this.ensureInitialized();
+
+    const sourceSet = new Set(sources);
+    logger.info(`Batch deleting documents for ${sources.length} sources`);
+
+    try {
+      const idsToDelete: string[] = [];
+      for (const [id, doc] of this.cachedDocs.entries()) {
+        if (sourceSet.has(doc.metadata.source)) {
+          idsToDelete.push(id);
+        }
+      }
+
+      if (idsToDelete.length > 0) {
+        idsToDelete.forEach(id => this.cachedDocs.delete(id));
+
+        const oldMemoryVectors: Array<{ content: string; embedding: number[]; metadata: Record<string, any> }> =
+          (this.vectorStore as any).memoryVectors || [];
+
+        this.vectorStore = new MemoryVectorStore(this.embeddings);
+
+        if (oldMemoryVectors.length > 0) {
+          const remaining = oldMemoryVectors.filter(mv => !sourceSet.has(mv.metadata?.source));
+
+          if (remaining.length > 0) {
+            const docs = remaining.map(r =>
+              new Document({ pageContent: r.content, metadata: r.metadata })
+            );
+            const vectors = remaining.map(r => r.embedding);
+            await this.vectorStore.addVectors(vectors, docs);
+          }
+        }
+
+        this.isDirty = true;
+        await this.persist();
+
+        logger.info(`Batch deleted ${idsToDelete.length} vectors across ${sources.length} sources`);
+      }
+    } catch (error) {
+      logger.error('Failed to batch delete documents:', error);
       throw error;
     }
   }
@@ -525,7 +576,8 @@ export class VectorStoreService {
    * 构建缓存 key
    */
   private buildCacheId(metadata: Record<string, any>, fallbackIndex: number): string {
-    return `${metadata.source || 'unknown'}_${metadata.chunkIndex ?? fallbackIndex}`;
+    const source = VectorStoreService.sanitizeId(metadata.source || 'unknown');
+    return `${source}_${metadata.chunkIndex ?? fallbackIndex}`;
   }
 }
 

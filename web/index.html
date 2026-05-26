@@ -1012,9 +1012,16 @@
     /* ===== Chat Messages ===== */
     .chat-area {
       flex: 1;
+      display: flex;
+      overflow: hidden;
+      position: relative;
+    }
+    .chat-content {
+      flex: 1;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
+      position: relative;
     }
 
     /* Welcome screen */
@@ -1603,6 +1610,118 @@
         max-width: 85%;
       }
     }
+
+    /* ===== Chat Navigation (TOC) ===== */
+    .chat-nav-show-btn {
+      position: absolute;
+      right: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 20px;
+      height: 48px;
+      border: none;
+      border-radius: 6px 0 0 6px;
+      background: var(--border-color);
+      color: var(--text-muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 19;
+      transition: background 0.2s, color 0.2s, width 0.2s;
+    }
+    .chat-nav-show-btn:hover {
+      background: var(--hover-bg);
+      color: var(--text-primary);
+      width: 24px;
+    }
+    .chat-nav {
+      width: 220px;
+      min-width: 0;
+      background: var(--sidebar-bg);
+      border-left: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      flex-shrink: 0;
+      transition: width 0.25s cubic-bezier(.4,0,.2,1), opacity 0.2s ease;
+    }
+    .chat-nav.hidden {
+      width: 0;
+      min-width: 0;
+      opacity: 0;
+      overflow: hidden;
+      border-left: none;
+    }
+    .chat-nav-header {
+      padding: 10px 14px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+      letter-spacing: 0.02em;
+    }
+    .chat-nav-header span {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .chat-nav-close-btn {
+      width: 22px;
+      height: 22px;
+      border-radius: 4px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s, color 0.15s;
+    }
+    .chat-nav-close-btn:hover {
+      background: var(--hover-bg);
+      color: var(--text-primary);
+    }
+    .chat-nav-list {
+      overflow-y: auto;
+      flex: 1;
+      padding: 6px 0;
+    }
+    .chat-nav-item {
+      padding: 8px 14px;
+      font-size: 0.78rem;
+      line-height: 1.4;
+      color: var(--text-secondary);
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      border-left: 2px solid transparent;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .chat-nav-item:hover {
+      background: var(--hover-bg);
+      color: var(--text-primary);
+      border-left-color: var(--text-muted);
+    }
+    .chat-nav-item.active {
+      background: var(--active-bg);
+      color: var(--accent);
+      font-weight: 500;
+      border-left-color: var(--accent);
+    }
+    .chat-nav-empty {
+      padding: 24px 14px;
+      text-align: center;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+    }
+
   </style>
 </head>
 <body>
@@ -1788,10 +1907,44 @@
       </div>
 
       <div class="chat-area" id="chatArea">
-        <!-- Welcome screen or messages -->
-        <div class="welcome" id="welcomeScreen">
-          <h1 class="welcome-title">有什么可以帮你的？</h1>
+        <div class="chat-content" id="chatContent">
+          <!-- Welcome screen or messages -->
+          <div class="welcome" id="welcomeScreen">
+            <h1 class="welcome-title">有什么可以帮你的？</h1>
+          </div>
         </div>
+
+        <button class="chat-nav-show-btn" id="chatNavShowBtn" onclick="toggleChatNav()" title="对话目录">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+        </button>
+
+        <!-- Chat Navigation Panel -->
+        <div class="chat-nav hidden" id="chatNav">
+          <div class="chat-nav-header">
+            <span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                <line x1="8" y1="6" x2="21" y2="6"></line>
+                <line x1="8" y1="12" x2="21" y2="12"></line>
+                <line x1="8" y1="18" x2="21" y2="18"></line>
+                <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                <line x1="3" y1="18" x2="3.01" y2="18"></line>
+              </svg>
+              对话目录
+            </span>
+            <button class="chat-nav-close-btn" onclick="toggleChatNav()" title="收起目录">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                <polyline points="15 18 9 12 15 6"></polyline>
+              </svg>
+            </button>
+          </div>
+          <div class="chat-nav-list" id="chatNavList">
+            <div class="chat-nav-empty">暂无对话</div>
+          </div>
+        </div>
+
       </div>
 
       <div class="upload-progress" id="uploadProgress">
